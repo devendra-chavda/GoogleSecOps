@@ -167,20 +167,62 @@
         "schema": {
           "name": "[concat(parameters('GCSDetectionAlertsTableName'), '_CL')]",
           "columns": [
-            { "name": "TimeGenerated", "type": "datetime" },
-            { "name": "detection_id", "type": "string" },
-            { "name": "type", "type": "string" },
-            { "name": "detection_time", "type": "datetime" },
-            { "name": "rule_id", "type": "string" },
-            { "name": "rule_name", "type": "string" },
-            { "name": "rule_version", "type": "string" },
-            { "name": "rule_labels", "type": "dynamic" },
-            { "name": "severity", "type": "string" },
-            { "name": "summary", "type": "string" },
-            { "name": "url_back_to_product", "type": "string" },
-            { "name": "collection_elements", "type": "dynamic" },
-            { "name": "alert_state", "type": "string" },
-            { "name": "detector_id", "type": "string" }
+            {
+              "name": "TimeGenerated",
+              "type": "datetime"
+            },
+            {
+              "name": "detection_id",
+              "type": "string"
+            },
+            {
+              "name": "type",
+              "type": "string"
+            },
+            {
+              "name": "detection_time",
+              "type": "datetime"
+            },
+            {
+              "name": "rule_id",
+              "type": "string"
+            },
+            {
+              "name": "rule_name",
+              "type": "string"
+            },
+            {
+              "name": "rule_version",
+              "type": "string"
+            },
+            {
+              "name": "rule_labels",
+              "type": "dynamic"
+            },
+            {
+              "name": "severity",
+              "type": "string"
+            },
+            {
+              "name": "summary",
+              "type": "string"
+            },
+            {
+              "name": "url_back_to_product",
+              "type": "string"
+            },
+            {
+              "name": "collection_elements",
+              "type": "dynamic"
+            },
+            {
+              "name": "alert_state",
+              "type": "string"
+            },
+            {
+              "name": "detector_id",
+              "type": "string"
+            }
           ]
         },
         "retentionInDays": 90,
@@ -200,19 +242,58 @@
         "streamDeclarations": {
           "[concat('Custom-', parameters('GCSDetectionAlertsTableName'))]": {
             "columns": [
-              { "name": "detection_id", "type": "string" },
-              { "name": "type", "type": "string" },
-              { "name": "detection_time", "type": "datetime" },
-              { "name": "rule_id", "type": "string" },
-              { "name": "rule_name", "type": "string" },
-              { "name": "rule_version", "type": "string" },
-              { "name": "rule_labels", "type": "dynamic" },
-              { "name": "severity", "type": "string" },
-              { "name": "summary", "type": "string" },
-              { "name": "url_back_to_product", "type": "string" },
-              { "name": "collection_elements", "type": "dynamic" },
-              { "name": "alert_state", "type": "string" },
-              { "name": "detector_id", "type": "string" }
+              {
+                "name": "detection_id",
+                "type": "string"
+              },
+              {
+                "name": "type",
+                "type": "string"
+              },
+              {
+                "name": "detection_time",
+                "type": "datetime"
+              },
+              {
+                "name": "rule_id",
+                "type": "string"
+              },
+              {
+                "name": "rule_name",
+                "type": "string"
+              },
+              {
+                "name": "rule_version",
+                "type": "string"
+              },
+              {
+                "name": "rule_labels",
+                "type": "dynamic"
+              },
+              {
+                "name": "severity",
+                "type": "string"
+              },
+              {
+                "name": "summary",
+                "type": "string"
+              },
+              {
+                "name": "url_back_to_product",
+                "type": "string"
+              },
+              {
+                "name": "collection_elements",
+                "type": "dynamic"
+              },
+              {
+                "name": "alert_state",
+                "type": "string"
+              },
+              {
+                "name": "detector_id",
+                "type": "string"
+              }
             ]
           }
         },
@@ -311,8 +392,14 @@
         "supportsHttpsTrafficOnly": true,
         "encryption": {
           "services": {
-            "file": { "keyType": "Account", "enabled": true },
-            "blob": { "keyType": "Account", "enabled": true }
+            "file": {
+              "keyType": "Account",
+              "enabled": true
+            },
+            "blob": {
+              "keyType": "Account",
+              "enabled": true
+            }
           },
           "keySource": "Microsoft.Storage"
         },
@@ -326,10 +413,17 @@
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts', tolower(variables('FunctionName')))]"
       ],
-      "sku": { "name": "Standard_LRS", "tier": "Standard" },
+      "sku": {
+        "name": "Standard_LRS",
+        "tier": "Standard"
+      },
       "properties": {
-        "cors": { "corsRules": [] },
-        "deleteRetentionPolicy": { "enabled": false }
+        "cors": {
+          "corsRules": []
+        },
+        "deleteRetentionPolicy": {
+          "enabled": false
+        }
       }
     },
     {
@@ -339,8 +433,15 @@
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts', tolower(variables('FunctionName')))]"
       ],
-      "sku": { "name": "Standard_LRS", "tier": "Standard" },
-      "properties": { "cors": { "corsRules": [] } }
+      "sku": {
+        "name": "Standard_LRS",
+        "tier": "Standard"
+      },
+      "properties": {
+        "cors": {
+          "corsRules": []
+        }
+      }
     },
     {
       "type": "Microsoft.Web/sites",
@@ -352,14 +453,18 @@
         "[resourceId('Microsoft.Insights/components', variables('FunctionName'))]"
       ],
       "kind": "functionapp,linux",
-      "identity": { "type": "SystemAssigned" },
+      "identity": {
+        "type": "SystemAssigned"
+      },
       "properties": {
         "name": "[variables('FunctionName')]",
         "httpsOnly": true,
         "clientAffinityEnabled": true,
         "alwaysOn": true,
         "reserved": true,
-        "siteConfig": { "linuxFxVersion": "python|3.12" }
+        "siteConfig": {
+          "linuxFxVersion": "python|3.12"
+        }
       },
       "resources": [
         {
@@ -406,7 +511,9 @@
         "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('FunctionName'), 'default')]",
         "[resourceId('Microsoft.Storage/storageAccounts', variables('FunctionName'))]"
       ],
-      "properties": { "publicAccess": "None" }
+      "properties": {
+        "publicAccess": "None"
+      }
     },
     {
       "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
@@ -416,7 +523,9 @@
         "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('FunctionName'), 'default')]",
         "[resourceId('Microsoft.Storage/storageAccounts', variables('FunctionName'))]"
       ],
-      "properties": { "publicAccess": "None" }
+      "properties": {
+        "publicAccess": "None"
+      }
     },
     {
       "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
@@ -426,7 +535,9 @@
         "[resourceId('Microsoft.Storage/storageAccounts/fileServices', variables('FunctionName'), 'default')]",
         "[resourceId('Microsoft.Storage/storageAccounts', variables('FunctionName'))]"
       ],
-      "properties": { "shareQuota": 5120 }
+      "properties": {
+        "shareQuota": 5120
+      }
     }
   ]
 }

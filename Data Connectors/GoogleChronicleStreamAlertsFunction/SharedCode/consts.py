@@ -4,9 +4,9 @@ import os
 
 # Logging
 LOG_LEVEL = os.environ.get("LogLevel", "INFO")
-LOGS_STARTS_WITH = "GoogleChronicleStreamAlerts"
+LOGS_STARTS_WITH = "GoogleSecOpsDetectionAlerts"
 LOG_PREFIX = LOGS_STARTS_WITH
-FUNCTION_NAME = "GoogleChronicleStreamAlerts"
+FUNCTION_NAME = "GoogleSecOpsDetectionAlerts"
 LOG_FORMAT = "{}(method = {}) : {}"
 
 # Azure Sentinel - Log Ingestion API
