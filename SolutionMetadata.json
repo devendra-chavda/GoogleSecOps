@@ -1,0 +1,20 @@
+{
+	"publisherId": "azuresentinel",
+	"offerId": "azure-sentinel-solution-GoogleSecops",
+	"firstPublishDate": "2025-04-04",
+	"providers": [
+		"Google"
+	],
+	"categories": {
+		"domains": [
+			"DevOps",
+			"Security - Network"
+		]
+	},
+	"support": {
+		"name": "crestdata",
+		"email": "devendra.chavda@crestdata.ai",
+		"tier": "Microsoft",
+		"link": "https://support.microsoft.com"
+	}
+}

@@ -1,0 +1,8 @@
+azure-functions==1.17.0
+azure-identity==1.17.1
+azure-monitor-ingestion==1.0.4
+azure-data-tables==12.5.0
+azure-storage-file-share==12.15.0
+requests==2.32.3
+PyJWT==2.9.0
+cryptography==43.0.1
