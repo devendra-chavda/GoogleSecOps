@@ -143,8 +143,11 @@ class ChronicleClient:
                                         len(json_string),
                                         exc,
                                     )
-                    # All other chars (commas, brackets, whitespace) between
-                    # top-level objects are intentionally ignored.
+                    elif depth > 0:
+                        # Inside an object — keep colons, commas, brackets,
+                        # whitespace, and bare value chars (true/false/null/numbers).
+                        buf.append(ch)
+                    # else: depth==0, between top-level objects — skip.
 
         except Exception as exc:
             # Surface stream-read errors as a synthetic error batch so the
