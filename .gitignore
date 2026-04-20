@@ -1,0 +1,5 @@
+.claude
+.vscode
+test.py
+detections.ndjson
+*.python_packages
