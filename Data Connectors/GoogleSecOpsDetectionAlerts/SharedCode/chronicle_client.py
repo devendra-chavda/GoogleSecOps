@@ -73,49 +73,92 @@ class ChronicleClient:
             f"instances/{instance_id}/legacy:legacyStreamDetectionAlerts"
         )
 
-    # ── Stream line parser (mirrors Demisto reference parse_stream) ───────────
+    # ── Stream parser using brace-depth counting ─────────────────────────────
 
     @staticmethod
     def _parse_stream(response: httpx.Response) -> Iterator[dict]:
-        """Yield one dict per detection batch from the streaming HTTP response.
+        """Yield one dict per top-level JSON object from the streaming response.
 
-        The Chronicle server sends a continuous JSON array whose top-level
-        elements are delimited by newlines.  Each element is a JSON object.
-        We strip the surrounding array punctuation and parse each object
-        individually so we can act on it immediately without buffering the
-        whole (infinite) array in memory.
+        Chronicle sends a never-closing JSON array whose elements may be
+        pretty-printed across multiple lines (e.g. the detections list is
+        indented).  iter_lines() would split those objects at internal newlines
+        and corrupt the JSON.  Instead we track brace depth character-by-
+        character so each complete top-level object is extracted intact,
+        regardless of how many lines it spans.
 
-        Reference: Demisto GoogleChronicleBackstoryStreamingAPI.parse_stream()
+        String contents (including escaped braces) are correctly handled so
+        that '{' / '}' inside field values do not confuse the depth counter.
         """
-        for line in response.iter_lines():
-            if not line:
-                continue
+        depth = 0
+        buf: list = []          # characters of the current object
+        in_string = False
+        escape_next = False
 
-            line = line.strip()
+        try:
+            for chunk in response.iter_text():
+                for ch in chunk:
+                    # ── String-escape state ───────────────────────────────────
+                    if escape_next:
+                        escape_next = False
+                        if depth > 0:
+                            buf.append(ch)
+                        continue
 
-            # Skip JSON array wrapper characters and bare commas.
-            if line in ("[", "]", ",", "[,"):
-                continue
+                    if ch == "\\" and in_string:
+                        escape_next = True
+                        if depth > 0:
+                            buf.append(ch)
+                        continue
 
-            # Strip a trailing comma left by the array format:  {...},
-            line = line.rstrip(",")
+                    if ch == '"':
+                        in_string = not in_string
+                        if depth > 0:
+                            buf.append(ch)
+                        continue
 
-            if "{" not in line:
-                continue
+                    if in_string:
+                        if depth > 0:
+                            buf.append(ch)
+                        continue
 
-            # Extract the JSON object: from first '{' to last '}' (inclusive).
-            # Input:  "  {\"heartbeat\": true},  "
-            # Output: "{\"heartbeat\": true}"
-            try:
-                json_string = "{" + line.split("{", 1)[1].rsplit("}", 1)[0] + "}"
-                yield json.loads(json_string)
-            except (json.JSONDecodeError, IndexError) as exc:
-                applogger.warning(
-                    "%s: _parse_stream: unparseable line (skipping): %r — %s",
-                    consts.LOG_PREFIX,
-                    line[:300],
-                    exc,
-                )
+                    # ── Brace depth tracking (outside strings) ────────────────
+                    if ch == "{":
+                        depth += 1
+                        buf.append(ch)
+                    elif ch == "}":
+                        if depth > 0:
+                            buf.append(ch)
+                            depth -= 1
+                            if depth == 0:
+                                # Complete top-level object assembled.
+                                json_string = "".join(buf)
+                                buf = []
+                                try:
+                                    yield json.loads(json_string)
+                                except json.JSONDecodeError as exc:
+                                    applogger.warning(
+                                        "%s: _parse_stream: JSON decode error "
+                                        "(skipping %d chars): %s",
+                                        consts.LOG_PREFIX,
+                                        len(json_string),
+                                        exc,
+                                    )
+                    # All other chars (commas, brackets, whitespace) between
+                    # top-level objects are intentionally ignored.
+
+        except Exception as exc:
+            # Surface stream-read errors as a synthetic error batch so the
+            # caller's error-handling path triggers a reconnect.
+            applogger.warning(
+                "%s: _parse_stream: stream read error: %s", consts.LOG_PREFIX, exc
+            )
+            yield {
+                "error": {
+                    "code": 503,
+                    "status": "UNAVAILABLE",
+                    "message": f"Stream read error: {exc!r}",
+                }
+            }
 
     # ── Single streaming connection ───────────────────────────────────────────
 
@@ -217,7 +260,9 @@ class ChronicleClient:
                         )
 
                     # ── Heartbeat ─────────────────────────────────────────────
-                    if batch.get("heartbeat"):
+                    # Check key existence, not value — Chronicle may send
+                    # {"heartbeat": false} on some versions.
+                    if "heartbeat" in batch:
                         applogger.debug("%s: heartbeat (keep-alive)", consts.LOG_PREFIX)
                         continue
 
