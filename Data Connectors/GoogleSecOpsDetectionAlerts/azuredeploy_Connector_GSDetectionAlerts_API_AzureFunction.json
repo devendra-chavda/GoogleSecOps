@@ -176,7 +176,7 @@
               "type": "string"
             },
             {
-              "name": "type",
+              "name": "DetectionType",
               "type": "string"
             },
             {
@@ -313,7 +313,7 @@
             "destinations": [
               "[concat('RuleDest', variables('suffix'))]"
             ],
-            "transformKql": "source\n| extend TimeGenerated = todatetime(detection_time)",
+            "transformKql": "source\n| extend TimeGenerated = todatetime(detection_time) | project-rename DetectionType = ['type']",
             "outputStream": "[concat('Custom-', parameters('GCSDetectionAlertsTableName'), '_CL')]"
           }
         ]
@@ -498,7 +498,7 @@
             "DCR_RULE_ID": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', variables('dataRuleName'))).immutableId]",
             "DcrStreamName": "[concat('Custom-', parameters('GCSDetectionAlertsTableName'))]",
             "SCOPE": "[variables('scope')]",
-            "WEBSITE_RUN_FROM_PACKAGE": "https://aka.ms/sentinel-GSDetectionAlerts-functionapp"
+            "WEBSITE_RUN_FROM_PACKAGE": "https://github.com/devendra-chavda/GoogleSecOps/blob/main/Data%20Connectors/GoogleSecOpsDetectionAlerts/GoogleSecOpsDetectionAlerts.zip"
           }
         }
       ]

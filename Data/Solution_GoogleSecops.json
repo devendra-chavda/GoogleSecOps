@@ -4,7 +4,7 @@
   "Logo": "<img src =\"https://raw.githubusercontent.com/Azure/Azure-Sentinel/master/Logos/google_logo.svg\" width=\"75px\" height=\"75px\">",
   "Description": "The [Google SecOps](https://cloud.google.com/security/products/security-operations) solution for Microsoft Sentinel provides the capability to ingest detection alerts from Google SecOps (formerly Chronicle) into Microsoft Sentinel using the legacyStreamDetectionAlerts API.",
   "Data Connectors": [
-    "Data Connectors/GoogleChronicleStreamAlertsFunction/GSDetectionAlerts_API_FunctionApp.json"
+    "Data Connectors/GoogleSecOpsDetectionAlerts/GSDetectionAlerts_API_FunctionApp.json"
   ],
   "Parsers": [
     "Parsers/GCSDetectionAlerts.yaml",
