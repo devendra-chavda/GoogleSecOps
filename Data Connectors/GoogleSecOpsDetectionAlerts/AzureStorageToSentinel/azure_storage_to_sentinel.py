@@ -50,32 +50,12 @@ class AzureStorageToSentinel:
     def __init__(self, start_epoch: str) -> None:
         self._fn = consts.FUNCTION_NAME_INGESTER
         self._start_epoch = int(start_epoch)
-        self._check_env_vars()
 
         self._data_dir = ShareDirectoryClient.from_connection_string(
             conn_str=consts.CONN_STRING,
             share_name=consts.FILE_SHARE_NAME_DATA,
             directory_path="",
         )
-
-    # ── Environment validation ────────────────────────────────────────────────
-
-    def _check_env_vars(self) -> None:
-        __method_name = inspect.currentframe().f_code.co_name
-        required = [
-            ("AzureWebJobsStorage", consts.CONN_STRING),
-            ("WorkspaceId", consts.WORKSPACE_ID),
-            ("WorkspaceKey", consts.WORKSPACE_KEY),
-        ]
-        missing = [name for name, val in required if not val]
-        if missing:
-            applogger.error(
-                "%s (%s): missing required environment variables: %s",
-                consts.LOG_PREFIX,
-                __method_name,
-                missing,
-            )
-            raise ValueError(f"Missing required environment variables: {missing}")
 
     # ── Main entry point ──────────────────────────────────────────────────────
 
