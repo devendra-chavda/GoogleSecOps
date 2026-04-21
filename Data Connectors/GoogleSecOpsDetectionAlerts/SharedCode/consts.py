@@ -10,10 +10,10 @@ FUNCTION_NAME_FETCHER = "GoogleSecOpsToStorage"
 FUNCTION_NAME_INGESTER = "AzureStorageToSentinel"
 LOG_FORMAT = "{}(method = {}) : {} : {}"
 
-# ── Azure Sentinel – Log Analytics Workspace (HMAC / Data Collector API) ─────
-WORKSPACE_ID = os.environ.get("WorkspaceId", "")
-WORKSPACE_KEY = os.environ.get("WorkspaceKey", "")
-LOG_TYPE = os.environ.get("LogType", "GCSDetectionAlerts")
+# ── Azure Monitor Ingestion (DCR-based) ──────────────────────────────────────
+DCE_ENDPOINT = os.environ.get("AZURE_DATA_COLLECTION_ENDPOINT", "")  # set by ARM template
+DCR_IMMUTABLE_ID = os.environ.get("DCR_RULE_ID", "")                 # set by ARM template
+DCR_STREAM_NAME = os.environ.get("DcrStreamName", "")                # set by ARM template
 
 # ── Chronicle API ─────────────────────────────────────────────────────────────
 CHRONICLE_PROJECT_ID = os.environ.get("ChronicleProjectId", "")

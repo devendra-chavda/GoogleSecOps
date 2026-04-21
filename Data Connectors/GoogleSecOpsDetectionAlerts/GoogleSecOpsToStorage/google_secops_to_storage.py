@@ -79,10 +79,14 @@ class GoogleSecOpsToStorage:
     def _check_env_vars(self) -> None:
         __method_name = inspect.currentframe().f_code.co_name
         required = [
+            ("AzureWebJobsStorage", consts.CONN_STRING),
             ("ChronicleProjectId", consts.CHRONICLE_PROJECT_ID),
             ("ChronicleRegion", consts.CHRONICLE_REGION),
             ("ChronicleInstanceId", consts.CHRONICLE_INSTANCE_ID),
-            ("ChronicleServiceAccountJson", consts.SERVICE_ACCOUNT_JSON)
+            ("ChronicleServiceAccountJson", consts.SERVICE_ACCOUNT_JSON),
+            ("AZURE_DATA_COLLECTION_ENDPOINT", consts.DCE_ENDPOINT),
+            ("DCR_RULE_ID", consts.DCR_IMMUTABLE_ID),
+            ("DcrStreamName", consts.DCR_STREAM_NAME),
         ]
         missing = [name for name, val in required if not val]
         if missing:
