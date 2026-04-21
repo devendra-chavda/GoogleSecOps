@@ -244,7 +244,7 @@ class AzureStorageToSentinel:
         for i in range(0, len(events), _BATCH_SIZE):
             batch = events[i : i + _BATCH_SIZE]
             body = json.dumps(batch)
-            post_data(body, consts.LOG_TYPE)
+            post_data(body, consts.DCR_STREAM_NAME)
             posted += len(batch)
             applogger.info(
                 "%s (%s): file='%s'  batch %d–%d posted (%d events)",
