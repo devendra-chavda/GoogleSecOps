@@ -58,10 +58,13 @@
         "description": "Full JSON content of the Google Cloud service-account key."
       }
     },
-    "InputStartTime": {
-      "type": "string",
+    "LookbackDays": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "maxValue": 7,
       "metadata": {
-        "description": "ISO-8601 UTC start time for the initial data pull (e.g., 2026-04-01T00:00:00Z). Subsequent runs use the persisted checkpoint."
+        "description": "Number of days to look back for initial data pull. Range: 1-7 days. Calculation: current UTC time - N days. Example: if current time is 2026-04-15T00:01:23Z and LookbackDays=1, start time will be 2026-04-14T00:01:23Z. Subsequent runs use the persisted checkpoint."
       }
     },
     "Schedule": {
@@ -485,7 +488,7 @@
             "ChronicleRegion": "[parameters('ChronicleRegion')]",
             "ChronicleInstanceId": "[parameters('ChronicleInstanceId')]",
             "ChronicleServiceAccountJson": "[parameters('ChronicleServiceAccountJson')]",
-            "InputStartTime": "[parameters('InputStartTime')]",
+            "LookbackDays": "[string(parameters('LookbackDays'))]",
             "GCSDetectionAlertsTableName": "[parameters('GCSDetectionAlertsTableName')]",
             "DetectionBatchSize": "[string(parameters('DetectionBatchSize'))]",
             "MaxDetections": "[string(parameters('MaxDetections'))]",

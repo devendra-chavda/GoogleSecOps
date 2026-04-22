@@ -26,7 +26,6 @@ SERVICE_ACCOUNT_JSON = os.environ.get("ChronicleServiceAccountJson", "")
 # ── Chronicle pagination parameters ───────────────────────────────────────────
 DETECTION_BATCH_SIZE = int(os.environ.get("DetectionBatchSize", "1000"))
 MAX_DETECTIONS = int(os.environ.get("MaxDetections", "100"))
-INPUT_START_TIME = os.environ.get("InputStartTime", "")
 LOOKBACK_DAYS = int(os.environ.get("LookbackDays", "1"))
 MAX_LOOKBACK_DAYS = 7
 
