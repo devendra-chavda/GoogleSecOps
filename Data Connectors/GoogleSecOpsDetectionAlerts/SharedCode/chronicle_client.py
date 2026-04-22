@@ -112,26 +112,74 @@ class ChronicleClient:
             pool=30.0,
         )
 
-        applogger.info("%s: making API call", consts.LOG_PREFIX)
+        applogger.info(
+            "%s: making API call (timeout=%ds, batchSize=%d)",
+            consts.LOG_PREFIX,
+            consts.API_TIMEOUT_SECONDS,
+            consts.DETECTION_BATCH_SIZE,
+        )
 
         try:
+            applogger.debug("%s: opening HTTP connection", consts.LOG_PREFIX)
+            # TODO: REMOVE - Response wait time tracking for debugging
+            request_start = time.time()
             with httpx.Client(timeout=timeout) as client:
+                applogger.debug("%s: sending POST request", consts.LOG_PREFIX)
                 response = client.post(self._endpoint, headers=headers, json=body)
+                request_elapsed = time.time() - request_start
+                # TODO: REMOVE - Log API response wait time
+                applogger.info(
+                    "%s: HTTP response received (status=%d, size=%s, wait=%.2fs)",
+                    consts.LOG_PREFIX,
+                    response.status_code,
+                    response.headers.get("content-length", "unknown"),
+                    request_elapsed,
+                )
         except httpx.RequestError as exc:
+            applogger.error("%s: HTTP request failed: %s", consts.LOG_PREFIX, exc)
             raise ChronicleApiError(f"Network error: {exc}") from exc
 
         if response.status_code == 401:
+            applogger.error("%s: Unauthorized (401)", consts.LOG_PREFIX)
             raise ChronicleApiError("Unauthorized (401)", status_code=401)
         if response.status_code >= 400:
+            applogger.error(
+                "%s: HTTP error %d", consts.LOG_PREFIX, response.status_code
+            )
             raise ChronicleApiError(
                 f"HTTP {response.status_code}",
                 status_code=response.status_code,
             )
 
         try:
-            return response.json()
+            # TODO: REMOVE - JSON parsing time tracking
+            parse_start = time.time()
+            applogger.debug("%s: parsing JSON response", consts.LOG_PREFIX)
+            batch = response.json()
+            parse_elapsed = time.time() - parse_start
+            # TODO: REMOVE - Log JSON parsing time
+            applogger.debug(
+                "%s: JSON parsed successfully (%.2fs), keys=%s",
+                consts.LOG_PREFIX,
+                parse_elapsed,
+                list(batch.keys()) if isinstance(batch, dict) else "array",
+            )
+            return batch
         except json.JSONDecodeError as exc:
+            applogger.error(
+                "%s: JSON decode error: %s, response=%s",
+                consts.LOG_PREFIX,
+                exc,
+                response.text[:500],
+            )
             raise ChronicleApiError(f"Invalid JSON response: {exc}") from exc
+        except Exception as exc:
+            applogger.error(
+                "%s: unexpected error parsing response: %s",
+                consts.LOG_PREFIX,
+                exc,
+            )
+            raise ChronicleApiError(f"Error parsing response: {exc}") from exc
 
     def _should_retry(self, exc: Exception) -> bool:
         """Check if exception is retryable."""
