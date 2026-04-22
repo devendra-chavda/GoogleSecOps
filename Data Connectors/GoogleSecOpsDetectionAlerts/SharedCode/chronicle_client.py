@@ -90,7 +90,7 @@ class ChronicleClient:
     def _make_api_call(
         self, page_start: str, page_token: Optional[str], deadline: Optional[float]
     ) -> dict:
-        """Make single API call and return batch."""
+        """Make single API call using streaming to avoid buffering large responses."""
         if deadline and time.time() >= deadline:
             raise ChronicleConnectorError("Time budget exhausted")
 
@@ -120,108 +120,89 @@ class ChronicleClient:
         )
 
         try:
-            applogger.debug("%s: opening HTTP connection", consts.LOG_PREFIX)
-            # TODO: REMOVE - Response wait time tracking for debugging
+            applogger.debug("%s: opening HTTP connection with streaming", consts.LOG_PREFIX)
+            # TODO: REMOVE - Response wait time tracking
             request_start = time.time()
+
+            # Use streaming=True to avoid buffering entire response
             with httpx.Client(timeout=timeout) as client:
-                applogger.debug("%s: sending POST request", consts.LOG_PREFIX)
-                response = client.post(self._endpoint, headers=headers, json=body)
-                request_elapsed = time.time() - request_start
-                # TODO: REMOVE - Log API response wait time
-                applogger.info(
-                    "%s: HTTP response received (status=%d, size=%s, wait=%.2fs)",
-                    consts.LOG_PREFIX,
-                    response.status_code,
-                    response.headers.get("content-length", "unknown"),
-                    request_elapsed,
-                )
+                applogger.debug("%s: sending POST request (stream=True)", consts.LOG_PREFIX)
+
+                with client.stream("POST", self._endpoint, headers=headers, json=body) as response:
+                    request_elapsed = time.time() - request_start
+                    # TODO: REMOVE - Log API response wait time
+                    applogger.info(
+                        "%s: HTTP response received (status=%d, wait=%.2fs)",
+                        consts.LOG_PREFIX,
+                        response.status_code,
+                        request_elapsed,
+                    )
+
+                    if response.status_code == 401:
+                        applogger.error("%s: Unauthorized (401)", consts.LOG_PREFIX)
+                        raise ChronicleApiError("Unauthorized (401)", status_code=401)
+                    if response.status_code >= 400:
+                        applogger.error(
+                            "%s: HTTP error %d", consts.LOG_PREFIX, response.status_code
+                        )
+                        raise ChronicleApiError(
+                            f"HTTP {response.status_code}",
+                            status_code=response.status_code,
+                        )
+
+                    # Read streaming response
+                    applogger.debug("%s: reading streaming response body", consts.LOG_PREFIX)
+                    # TODO: REMOVE - JSON parsing time tracking
+                    parse_start = time.time()
+
+                    applogger.debug("%s: reading all content from stream", consts.LOG_PREFIX)
+                    content = response.read()
+                    content_size = len(content)
+                    applogger.debug(
+                        "%s: stream read complete (%d bytes)",
+                        consts.LOG_PREFIX,
+                        content_size,
+                    )
+
+                    # Warn if very large
+                    if content_size > 100 * 1024 * 1024:
+                        applogger.warning(
+                            "%s: WARNING - Large response: %.2f MB",
+                            consts.LOG_PREFIX,
+                            content_size / (1024 * 1024),
+                        )
+
+                    try:
+                        applogger.debug("%s: decoding JSON from stream", consts.LOG_PREFIX)
+                        batch = json.loads(content)
+                        parse_elapsed = time.time() - parse_start
+                        # TODO: REMOVE - Log JSON parsing time
+                        applogger.debug(
+                            "%s: JSON parsed successfully (%.2fs), keys=%s",
+                            consts.LOG_PREFIX,
+                            parse_elapsed,
+                            list(batch.keys()) if isinstance(batch, dict) else "array",
+                        )
+                        return batch
+                    except json.JSONDecodeError as exc:
+                        applogger.error(
+                            "%s: JSON decode error: %s, first 500 bytes: %s",
+                            consts.LOG_PREFIX,
+                            exc,
+                            content[:500],
+                        )
+                        raise ChronicleApiError(f"Invalid JSON response: {exc}") from exc
+
         except httpx.RequestError as exc:
             applogger.error("%s: HTTP request failed: %s", consts.LOG_PREFIX, exc)
             raise ChronicleApiError(f"Network error: {exc}") from exc
-
-        if response.status_code == 401:
-            applogger.error("%s: Unauthorized (401)", consts.LOG_PREFIX)
-            raise ChronicleApiError("Unauthorized (401)", status_code=401)
-        if response.status_code >= 400:
-            applogger.error(
-                "%s: HTTP error %d", consts.LOG_PREFIX, response.status_code
-            )
-            raise ChronicleApiError(
-                f"HTTP {response.status_code}",
-                status_code=response.status_code,
-            )
-
-        # FIX: Check content length before trying to read entire response
-        content_length_str = response.headers.get("content-length", "0")
-        try:
-            content_length = int(content_length_str)
-        except (ValueError, TypeError):
-            content_length = 0
-
-        MAX_RESPONSE_SIZE = 500 * 1024 * 1024  # 500 MB limit
-
-        if content_length > MAX_RESPONSE_SIZE:
-            applogger.error(
-                "%s: Response too large: %.2f MB (exceeds limit of %.2f MB)",
-                consts.LOG_PREFIX,
-                content_length / (1024 * 1024),
-                MAX_RESPONSE_SIZE / (1024 * 1024),
-            )
-            raise ChronicleApiError(
-                f"Response too large: {content_length / (1024 * 1024):.2f} MB"
-            )
-
-        # Warn if response is very large but still acceptable
-        if content_length > 100 * 1024 * 1024:
-            applogger.warning(
-                "%s: WARNING - Large response: %.2f MB (parsing may be slow)",
-                consts.LOG_PREFIX,
-                content_length / (1024 * 1024),
-            )
-
-        try:
-            # TODO: REMOVE - JSON parsing time tracking
-            parse_start = time.time()
-            applogger.debug(
-                "%s: parsing JSON response (size=%d bytes)",
-                consts.LOG_PREFIX,
-                content_length,
-            )
-
-            # Read with timeout to prevent hanging
-            applogger.debug("%s: reading response body", consts.LOG_PREFIX)
-            body_text = response.text
-            applogger.debug(
-                "%s: response body read (%d bytes)", consts.LOG_PREFIX, len(body_text)
-            )
-
-            applogger.debug("%s: decoding JSON", consts.LOG_PREFIX)
-            batch = json.loads(body_text)
-
-            parse_elapsed = time.time() - parse_start
-            # TODO: REMOVE - Log JSON parsing time
-            applogger.debug(
-                "%s: JSON parsed successfully (%.2fs), keys=%s",
-                consts.LOG_PREFIX,
-                parse_elapsed,
-                list(batch.keys()) if isinstance(batch, dict) else "array",
-            )
-            return batch
-        except json.JSONDecodeError as exc:
-            applogger.error(
-                "%s: JSON decode error: %s, first 500 chars: %s",
-                consts.LOG_PREFIX,
-                exc,
-                response.text[:500] if hasattr(response, 'text') else "N/A",
-            )
-            raise ChronicleApiError(f"Invalid JSON response: {exc}") from exc
         except Exception as exc:
             applogger.error(
-                "%s: unexpected error parsing response: %s",
+                "%s: unexpected error in API call: %s",
                 consts.LOG_PREFIX,
                 exc,
             )
-            raise ChronicleApiError(f"Error parsing response: {exc}") from exc
+            raise ChronicleApiError(f"Error: {exc}") from exc
 
     def _should_retry(self, exc: Exception) -> bool:
         """Check if exception is retryable."""
