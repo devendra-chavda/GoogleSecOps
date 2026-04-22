@@ -151,11 +151,53 @@ class ChronicleClient:
                 status_code=response.status_code,
             )
 
+        # FIX: Check content length before trying to read entire response
+        content_length_str = response.headers.get("content-length", "0")
+        try:
+            content_length = int(content_length_str)
+        except (ValueError, TypeError):
+            content_length = 0
+
+        MAX_RESPONSE_SIZE = 500 * 1024 * 1024  # 500 MB limit
+
+        if content_length > MAX_RESPONSE_SIZE:
+            applogger.error(
+                "%s: Response too large: %.2f MB (exceeds limit of %.2f MB)",
+                consts.LOG_PREFIX,
+                content_length / (1024 * 1024),
+                MAX_RESPONSE_SIZE / (1024 * 1024),
+            )
+            raise ChronicleApiError(
+                f"Response too large: {content_length / (1024 * 1024):.2f} MB"
+            )
+
+        # Warn if response is very large but still acceptable
+        if content_length > 100 * 1024 * 1024:
+            applogger.warning(
+                "%s: WARNING - Large response: %.2f MB (parsing may be slow)",
+                consts.LOG_PREFIX,
+                content_length / (1024 * 1024),
+            )
+
         try:
             # TODO: REMOVE - JSON parsing time tracking
             parse_start = time.time()
-            applogger.debug("%s: parsing JSON response", consts.LOG_PREFIX)
-            batch = response.json()
+            applogger.debug(
+                "%s: parsing JSON response (size=%d bytes)",
+                consts.LOG_PREFIX,
+                content_length,
+            )
+
+            # Read with timeout to prevent hanging
+            applogger.debug("%s: reading response body", consts.LOG_PREFIX)
+            body_text = response.text
+            applogger.debug(
+                "%s: response body read (%d bytes)", consts.LOG_PREFIX, len(body_text)
+            )
+
+            applogger.debug("%s: decoding JSON", consts.LOG_PREFIX)
+            batch = json.loads(body_text)
+
             parse_elapsed = time.time() - parse_start
             # TODO: REMOVE - Log JSON parsing time
             applogger.debug(
@@ -167,10 +209,10 @@ class ChronicleClient:
             return batch
         except json.JSONDecodeError as exc:
             applogger.error(
-                "%s: JSON decode error: %s, response=%s",
+                "%s: JSON decode error: %s, first 500 chars: %s",
                 consts.LOG_PREFIX,
                 exc,
-                response.text[:500],
+                response.text[:500] if hasattr(response, 'text') else "N/A",
             )
             raise ChronicleApiError(f"Invalid JSON response: {exc}") from exc
         except Exception as exc:
