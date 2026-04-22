@@ -94,7 +94,10 @@ class ChronicleClient:
         if deadline and time.time() >= deadline:
             raise ChronicleConnectorError("Time budget exhausted")
 
-        body = {"detectionBatchSize": consts.DETECTION_BATCH_SIZE}
+        body = {
+            "detectionBatchSize": consts.DETECTION_BATCH_SIZE,
+            "maxDetections": consts.MAX_DETECTIONS,
+        }
         if page_token:
             body["pageToken"] = page_token
         else:
@@ -113,20 +116,21 @@ class ChronicleClient:
         )
 
         applogger.info(
-            "%s: making API call (timeout=%ds, batchSize=%d)",
+            "%s: making API call (timeout=%ds, batchSize=%d, maxDetections=%d)",
             consts.LOG_PREFIX,
             consts.API_TIMEOUT_SECONDS,
             consts.DETECTION_BATCH_SIZE,
+            consts.MAX_DETECTIONS,
         )
 
         try:
-            applogger.debug("%s: opening HTTP connection with streaming", consts.LOG_PREFIX)
+            applogger.info("%s: opening HTTP connection with streaming", consts.LOG_PREFIX)
             # TODO: REMOVE - Response wait time tracking
             request_start = time.time()
 
             # Use streaming=True to avoid buffering entire response
             with httpx.Client(timeout=timeout) as client:
-                applogger.debug("%s: sending POST request (stream=True)", consts.LOG_PREFIX)
+                applogger.info("%s: sending POST request (stream=True)", consts.LOG_PREFIX)
 
                 with client.stream("POST", self._endpoint, headers=headers, json=body) as response:
                     request_elapsed = time.time() - request_start
@@ -151,11 +155,11 @@ class ChronicleClient:
                         )
 
                     # Read streaming response with timeout and progress tracking
-                    applogger.debug("%s: reading streaming response body", consts.LOG_PREFIX)
+                    applogger.info("%s: reading streaming response body", consts.LOG_PREFIX)
                     # TODO: REMOVE - JSON parsing time tracking
                     parse_start = time.time()
 
-                    applogger.debug("%s: reading content from stream in chunks", consts.LOG_PREFIX)
+                    applogger.info("%s: reading content from stream in chunks", consts.LOG_PREFIX)
 
                     # Read stream in chunks to avoid blocking forever
                     chunks = []
@@ -172,7 +176,7 @@ class ChronicleClient:
 
                             # Log progress every 10 chunks (10 MB)
                             if chunk_count % 10 == 0:
-                                applogger.debug(
+                                applogger.info(
                                     "%s: reading stream... %d MB received (%d chunks)",
                                     consts.LOG_PREFIX,
                                     bytes_read / (1024 * 1024),
@@ -190,7 +194,7 @@ class ChronicleClient:
 
                     content = b"".join(chunks)
                     content_size = len(content)
-                    applogger.debug(
+                    applogger.info(
                         "%s: stream read complete (%d bytes in %d chunks)",
                         consts.LOG_PREFIX,
                         content_size,
@@ -206,7 +210,7 @@ class ChronicleClient:
                         )
 
                     try:
-                        applogger.debug("%s: decoding JSON from stream bytes", consts.LOG_PREFIX)
+                        applogger.info("%s: decoding JSON from stream bytes", consts.LOG_PREFIX)
 
                         # Decode bytes to string
                         if isinstance(content, bytes):
@@ -214,7 +218,7 @@ class ChronicleClient:
                         else:
                             content_str = str(content)
 
-                        applogger.debug(
+                        applogger.info(
                             "%s: decoded to string (%d chars), parsing JSON",
                             consts.LOG_PREFIX,
                             len(content_str),
@@ -224,7 +228,7 @@ class ChronicleClient:
                         batch = json.loads(content_str)
                         parse_elapsed = time.time() - parse_start
                         # TODO: REMOVE - Log JSON parsing time
-                        applogger.debug(
+                        applogger.info(
                             "%s: JSON parsed successfully (%.2fs), keys=%s",
                             consts.LOG_PREFIX,
                             parse_elapsed,
