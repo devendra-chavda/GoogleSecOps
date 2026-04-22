@@ -176,11 +176,11 @@ class ChronicleClient:
             raise ChronicleApiError(f"Error: {exc}") from exc
 
     def _read_stream_batch(self, response: "httpx.Response", timeout_seconds: int) -> dict:
-        """Read and parse first complete JSON batch from streaming response.
+        """Read and parse first complete JSON batch from never-ending streaming array.
 
-        Implements Demisto's line-based parsing with per-message timeout detection.
-        Reads response line-by-line until a complete JSON object is assembled,
-        timing out if no new line arrives within timeout_seconds.
+        Chronicle sends a never-closing JSON array: [{batch1}, {batch2}, ...]
+        Uses brace-depth tracking to extract individual batch objects.
+        Times out if no new line arrives within timeout_seconds.
 
         Args:
             response: Open httpx streaming response
@@ -189,15 +189,19 @@ class ChronicleClient:
         Returns:
             Parsed JSON batch dict
         """
-        lines = []
+        depth = 0
+        buf = []
+        in_string = False
+        escape_next = False
         last_line_time = time.time()
+        total_bytes = 0
 
         try:
             for line in response.iter_lines():
-                # Check for message timeout: no line received for N seconds
+                # Check for message timeout
                 now = time.time()
                 time_since_last = now - last_line_time
-                if time_since_last > timeout_seconds:
+                if time_since_last > timeout_seconds and depth > 0:
                     applogger.error(
                         "%s: No data received for %d seconds, stream timeout",
                         consts.LOG_PREFIX,
@@ -208,58 +212,89 @@ class ChronicleClient:
                     )
 
                 if not line or line.isspace():
-                    applogger.debug("%s: received blank line", consts.LOG_PREFIX)
                     continue
 
                 last_line_time = now
-                lines.append(line)
-                bytes_received = sum(len(l.encode("utf-8")) for l in lines)
+                total_bytes += len(line.encode("utf-8"))
 
                 # Log progress every 1 MB
-                if bytes_received > 0 and bytes_received % (1024 * 1024) == 0:
-                    applogger.info(
-                        "%s: stream read... %.2f MB received (%d lines)",
+                if total_bytes > 0 and total_bytes % (1024 * 1024) == 0:
+                    applogger.debug(
+                        "%s: stream read... %.2f MB received",
                         consts.LOG_PREFIX,
-                        bytes_received / (1024 * 1024),
-                        len(lines),
+                        total_bytes / (1024 * 1024),
                     )
 
-                # Try to parse accumulated lines as a complete batch
-                json_text = "".join(lines)
-                try:
-                    batch = json.loads(json_text)
-
-                    # Check for heartbeat
-                    if isinstance(batch, dict) and batch.get("heartbeat"):
-                        applogger.debug("%s: received heartbeat, continuing", consts.LOG_PREFIX)
-                        lines = []
+                # Brace-depth tracking to extract individual batch objects
+                for ch in line:
+                    # Handle string escape sequences
+                    if escape_next:
+                        escape_next = False
+                        if depth > 0:
+                            buf.append(ch)
                         continue
 
-                    # Complete batch received
-                    applogger.info(
-                        "%s: batch received (%.2f MB, %d lines), keys=%s",
-                        consts.LOG_PREFIX,
-                        bytes_received / (1024 * 1024),
-                        len(lines),
-                        list(batch.keys()) if isinstance(batch, dict) else "array",
-                    )
-                    return batch
+                    if ch == "\\" and in_string:
+                        escape_next = True
+                        if depth > 0:
+                            buf.append(ch)
+                        continue
 
-                except json.JSONDecodeError:
-                    # Incomplete JSON, keep accumulating lines
-                    continue
+                    if ch == '"':
+                        in_string = not in_string
+                        if depth > 0:
+                            buf.append(ch)
+                        continue
 
-                except Exception as exc:
-                    applogger.error(
-                        "%s: error parsing batch: %s",
-                        consts.LOG_PREFIX,
-                        exc,
-                    )
-                    raise ChronicleApiError(f"Batch parse error: {exc}") from exc
+                    if in_string:
+                        if depth > 0:
+                            buf.append(ch)
+                        continue
+
+                    # Brace depth tracking (outside strings)
+                    if ch == "{":
+                        depth += 1
+                        buf.append(ch)
+                    elif ch == "}":
+                        if depth > 0:
+                            buf.append(ch)
+                            depth -= 1
+                            if depth == 0:
+                                # Complete batch object found
+                                json_string = "".join(buf)
+                                buf = []
+                                try:
+                                    batch = json.loads(json_string)
+                                    applogger.debug(
+                                        "%s: batch received (%.2f MB), keys=%s",
+                                        consts.LOG_PREFIX,
+                                        total_bytes / (1024 * 1024),
+                                        list(batch.keys()) if isinstance(batch, dict) else "array",
+                                    )
+
+                                    # Check for heartbeat
+                                    if isinstance(batch, dict) and batch.get("heartbeat"):
+                                        applogger.debug(
+                                            "%s: received heartbeat",
+                                            consts.LOG_PREFIX,
+                                        )
+                                        continue
+
+                                    # Return first non-heartbeat batch
+                                    return batch
+
+                                except json.JSONDecodeError as exc:
+                                    applogger.warning(
+                                        "%s: JSON decode error in batch: %s",
+                                        consts.LOG_PREFIX,
+                                        exc,
+                                    )
+                    elif depth > 0:
+                        buf.append(ch)
 
         except httpx.TimeoutException as exc:
             applogger.error(
-                "%s: HTTP read timeout during stream: %s",
+                "%s: HTTP read timeout: %s",
                 consts.LOG_PREFIX,
                 exc,
             )
