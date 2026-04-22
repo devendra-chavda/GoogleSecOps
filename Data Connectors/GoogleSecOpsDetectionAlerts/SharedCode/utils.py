@@ -1,4 +1,5 @@
 """Utility helpers: exponential-backoff retry."""
+
 import random
 import time
 from functools import wraps
@@ -14,6 +15,7 @@ def retry_on_exception(
     base_delay: float = consts.RETRY_BASE_DELAY_SECONDS,
 ) -> Callable:
     """Retry the wrapped call with exponential backoff + jitter."""
+
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -25,7 +27,7 @@ def retry_on_exception(
                     last_exc = exc
                     if attempt == max_retries:
                         break
-                    delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                    delay = base_delay * (2**attempt) + random.uniform(0, 0.5)
                     applogger.warning(
                         "%s: %s failed (attempt %d/%d): %s; retrying in %.2fs",
                         consts.LOG_PREFIX,
@@ -37,5 +39,7 @@ def retry_on_exception(
                     )
                     time.sleep(delay)
             raise last_exc  # type: ignore[misc]
+
         return wrapper
+
     return decorator

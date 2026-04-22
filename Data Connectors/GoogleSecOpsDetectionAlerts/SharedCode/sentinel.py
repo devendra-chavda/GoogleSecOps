@@ -34,11 +34,13 @@ def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
     stream = stream_name.strip() if stream_name else ""
 
     missing = [
-        name for name, val in [
+        name
+        for name, val in [
             ("DCEEndpoint", endpoint),
             ("DCRImmutableId", rule_id),
             ("DCRStreamName", stream),
-        ] if not val
+        ]
+        if not val
     ]
     if missing:
         raise SentinelIngestionError(

@@ -7,6 +7,7 @@ Azure Log Analytics Workspace table via the Data Collector API.
 Trigger schedule: controlled by the *IngesterSchedule* app setting
 (CRON expression, e.g. "0 */5 * * * *" for every 5 minutes).
 """
+
 import datetime
 import logging
 import time

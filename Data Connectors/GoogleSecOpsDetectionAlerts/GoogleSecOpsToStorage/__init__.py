@@ -9,6 +9,7 @@ ingests the records into the Azure Log Analytics Workspace table.
 Trigger schedule: controlled by the *FetcherSchedule* app setting
 (CRON expression, e.g. "0 */5 * * * *" for every 5 minutes).
 """
+
 import datetime
 import logging
 import time

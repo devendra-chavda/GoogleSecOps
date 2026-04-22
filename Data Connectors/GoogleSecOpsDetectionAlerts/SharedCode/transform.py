@@ -30,6 +30,7 @@ Target schema (GCSDetectionAlerts_CL):
   rule_labels (dynamic), severity, summary, url_back_to_product,
   collection_elements (dynamic), alert_state, detector_id
 """
+
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List
@@ -48,13 +49,31 @@ def _build_collection_elements(det: dict) -> list:
     """Combine detectionFields, outcomes, and variables into a single dynamic array."""
     elements = []
     for field in det.get("detectionFields", []) or []:
-        elements.append({"source": "detectionField", "key": field.get("key", ""), "value": field.get("value", "")})
+        elements.append(
+            {
+                "source": "detectionField",
+                "key": field.get("key", ""),
+                "value": field.get("value", ""),
+            }
+        )
     for outcome in det.get("outcomes", []) or []:
-        elements.append({"source": outcome.get("source", "outcome"), "key": outcome.get("key", ""), "value": outcome.get("value", "")})
+        elements.append(
+            {
+                "source": outcome.get("source", "outcome"),
+                "key": outcome.get("key", ""),
+                "value": outcome.get("value", ""),
+            }
+        )
     variables = det.get("variables", {}) or {}
     for var_name, var_obj in variables.items():
         if isinstance(var_obj, dict):
-            elements.append({"source": "variable", "key": var_name, "value": var_obj.get("value", "")})
+            elements.append(
+                {
+                    "source": "variable",
+                    "key": var_name,
+                    "value": var_obj.get("value", ""),
+                }
+            )
     return elements
 
 
@@ -68,7 +87,8 @@ def transform_detection(raw: dict) -> Dict[str, Any]:
     return {
         "detection_id": _safe_str(raw, "id"),
         "type": _safe_str(raw, "type"),
-        "detection_time": raw.get("createdTime") or datetime.now(timezone.utc).isoformat(),
+        "detection_time": raw.get("createdTime")
+        or datetime.now(timezone.utc).isoformat(),
         "rule_id": _safe_str(det, "ruleId"),
         "rule_name": _safe_str(det, "ruleName"),
         "rule_version": _safe_str(det, "ruleVersion"),

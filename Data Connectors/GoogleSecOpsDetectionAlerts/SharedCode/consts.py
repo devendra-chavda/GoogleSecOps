@@ -11,9 +11,11 @@ FUNCTION_NAME_INGESTER = "AzureStorageToSentinel"
 LOG_FORMAT = "{}(method = {}) : {} : {}"
 
 # ── Azure Monitor Ingestion (DCR-based) ──────────────────────────────────────
-DCE_ENDPOINT = os.environ.get("AZURE_DATA_COLLECTION_ENDPOINT", "")  # set by ARM template
-DCR_IMMUTABLE_ID = os.environ.get("DCR_RULE_ID", "")                 # set by ARM template
-DCR_STREAM_NAME = os.environ.get("DcrStreamName", "")                # set by ARM template
+DCE_ENDPOINT = os.environ.get(
+    "AZURE_DATA_COLLECTION_ENDPOINT", ""
+)  # set by ARM template
+DCR_IMMUTABLE_ID = os.environ.get("DCR_RULE_ID", "")  # set by ARM template
+DCR_STREAM_NAME = os.environ.get("DcrStreamName", "")  # set by ARM template
 
 # ── Chronicle API ─────────────────────────────────────────────────────────────
 CHRONICLE_PROJECT_ID = os.environ.get("ChronicleProjectId", "")
@@ -24,6 +26,8 @@ SERVICE_ACCOUNT_JSON = os.environ.get("ChronicleServiceAccountJson", "")
 # ── Chronicle pagination parameters ───────────────────────────────────────────
 DETECTION_BATCH_SIZE = int(os.environ.get("DetectionBatchSize", "1000"))
 INPUT_START_TIME = os.environ.get("InputStartTime", "")
+LOOKBACK_DAYS = int(os.environ.get("LookbackDays", "1"))
+MAX_LOOKBACK_DAYS = 7
 
 # ── Checkpoint / state (Azure File Share) ─────────────────────────────────────
 # AzureWebJobsStorage is the standard connection string env-var for Azure Functions.
@@ -45,7 +49,6 @@ RETRY_BASE_DELAY_SECONDS = 2
 MAX_CONSECUTIVE_FAILURES = 7
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 FUNCTION_APP_TIMEOUT_SECONDS = 570
-FUNCTION_BUDGET_SECONDS = FUNCTION_APP_TIMEOUT_SECONDS
 
 # ── Data file settings ────────────────────────────────────────────────────────
 # Raw detection files are named:  google_secops_raw_<epoch>_<file_index>

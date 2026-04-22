@@ -1,18 +1,11 @@
-"""Google service-account JWT -> OAuth2 access token exchange.
+"""Google service account OAuth2 token provider."""
 
-The service account JSON (from GCP IAM) is supplied through the
-`ChronicleServiceAccountJson` app setting as the full JSON string.
-A JWT is signed with the private key (RS256) and exchanged for an
-access token at https://oauth2.googleapis.com/token.
-
-Tokens are cached in-process until they are near expiry.
-"""
 import json
 import time
 from typing import Optional
 
-import jwt
-import requests
+from google.oauth2 import service_account
+from google.auth.transport.requests import Request
 
 from . import consts
 from .exceptions import ChronicleAuthError
@@ -20,60 +13,52 @@ from .logger import applogger
 
 
 class GoogleServiceAccountAuth:
-    """Build and cache Google OAuth2 access tokens from a service account."""
+    """Manage Google OAuth2 tokens from service account credentials."""
 
     def __init__(self, service_account_json: str = consts.SERVICE_ACCOUNT_JSON):
-        if not service_account_json:
-            raise ChronicleAuthError("ChronicleServiceAccountJson is not configured.")
-        try:
-            self._sa = json.loads(service_account_json)
-        except json.JSONDecodeError as exc:
-            raise ChronicleAuthError(
-                "ChronicleServiceAccountJson is not valid JSON."
-            ) from exc
-        required = ("client_email", "private_key", "token_uri")
-        missing = [k for k in required if not self._sa.get(k)]
-        if missing:
-            raise ChronicleAuthError(
-                f"Service account JSON missing fields: {missing}"
-            )
+        self._validate_and_load(service_account_json)
         self._token: Optional[str] = None
         self._token_expiry: float = 0.0
 
-    def _build_assertion(self) -> str:
-        now = int(time.time())
-        payload = {
-            "iss": self._sa["client_email"],
-            "scope": consts.OAUTH_SCOPE,
-            "aud": self._sa.get("token_uri", consts.OAUTH_TOKEN_URL),
-            "iat": now,
-            "exp": now + 3600,
-        }
-        return jwt.encode(payload, self._sa["private_key"], algorithm="RS256")
+    def _validate_and_load(self, service_account_json: str) -> None:
+        if not service_account_json:
+            raise ChronicleAuthError("ChronicleServiceAccountJson not configured")
+
+        try:
+            sa_dict = json.loads(service_account_json)
+        except json.JSONDecodeError as exc:
+            raise ChronicleAuthError("ChronicleServiceAccountJson invalid JSON") from exc
+
+        missing = [k for k in ("client_email", "private_key") if not sa_dict.get(k)]
+        if missing:
+            raise ChronicleAuthError(f"Missing fields: {missing}")
+
+        try:
+            self._creds = service_account.Credentials.from_service_account_info(
+                sa_dict, scopes=[consts.OAUTH_SCOPE]
+            )
+        except Exception as exc:
+            raise ChronicleAuthError(f"Failed to create credentials: {exc}") from exc
 
     def get_access_token(self) -> str:
+        """Get or refresh access token."""
         now = time.time()
-        if self._token and now < self._token_expiry - consts.TOKEN_EXPIRY_BUFFER_SECONDS:
+        if self._is_token_valid(now):
             return self._token
-        assertion = self._build_assertion()
-        data = {
-            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-            "assertion": assertion,
-        }
+
         try:
-            resp = requests.post(
-                self._sa.get("token_uri", consts.OAUTH_TOKEN_URL),
-                data=data,
-                timeout=30,
-            )
-        except requests.RequestException as exc:
-            raise ChronicleAuthError(f"Token request failed: {exc}") from exc
-        if resp.status_code != 200:
-            raise ChronicleAuthError(
-                f"Token exchange failed ({resp.status_code}): {resp.text}"
-            )
-        body = resp.json()
-        self._token = body["access_token"]
-        self._token_expiry = now + int(body.get("expires_in", 3600))
-        applogger.info("%s: acquired new Google access token", consts.LOG_PREFIX)
-        return self._token
+            self._creds.refresh(Request())
+            self._token = self._creds.token
+            self._token_expiry = self._calculate_expiry(now)
+            applogger.info("%s: acquired new Google access token", consts.LOG_PREFIX)
+            return self._token
+        except Exception as exc:
+            raise ChronicleAuthError(f"Token refresh failed: {exc}") from exc
+
+    def _is_token_valid(self, now: float) -> bool:
+        return self._token and now < self._token_expiry - consts.TOKEN_EXPIRY_BUFFER_SECONDS
+
+    def _calculate_expiry(self, now: float) -> float:
+        if self._creds.expiry:
+            return now + (self._creds.expiry - self._creds._clock.utcnow()).total_seconds()
+        return now + 3600
