@@ -154,102 +154,15 @@ class ChronicleClient:
                             status_code=response.status_code,
                         )
 
-                    # Read streaming response with timeout and progress tracking
-                    applogger.info("%s: reading streaming response body", consts.LOG_PREFIX)
-                    # TODO: REMOVE - JSON parsing time tracking
-                    parse_start = time.time()
-
-                    applogger.info("%s: reading content from stream in chunks", consts.LOG_PREFIX)
-
-                    # Read stream in chunks to avoid blocking forever
-                    chunks = []
-                    chunk_count = 0
-                    bytes_read = 0
-                    chunk_size = 1024 * 1024  # 1 MB chunks
-                    max_chunks = 1000  # Limit to ~1GB max
-
-                    for chunk in response.iter_bytes(chunk_size=chunk_size):
-                        if chunk:
-                            chunks.append(chunk)
-                            bytes_read += len(chunk)
-                            chunk_count += 1
-
-                            # Log progress every 10 chunks (10 MB)
-                            if chunk_count % 10 == 0:
-                                applogger.info(
-                                    "%s: reading stream... %d MB received (%d chunks)",
-                                    consts.LOG_PREFIX,
-                                    bytes_read / (1024 * 1024),
-                                    chunk_count,
-                                )
-
-                            # Safety limit: stop if too much data
-                            if chunk_count > max_chunks:
-                                applogger.error(
-                                    "%s: Stream reading exceeded max chunks (%d), stopping",
-                                    consts.LOG_PREFIX,
-                                    max_chunks,
-                                )
-                                break
-
-                    content = b"".join(chunks)
-                    content_size = len(content)
+                    # Read streaming response with per-message timeout (Demisto approach)
                     applogger.info(
-                        "%s: stream read complete (%d bytes in %d chunks)",
+                        "%s: reading streaming response, timeout=%ds between messages",
                         consts.LOG_PREFIX,
-                        content_size,
-                        chunk_count,
+                        consts.API_TIMEOUT_SECONDS,
                     )
 
-                    # Warn if very large
-                    if content_size > 100 * 1024 * 1024:
-                        applogger.warning(
-                            "%s: WARNING - Large response: %.2f MB",
-                            consts.LOG_PREFIX,
-                            content_size / (1024 * 1024),
-                        )
-
-                    try:
-                        applogger.info("%s: decoding JSON from stream bytes", consts.LOG_PREFIX)
-
-                        # Decode bytes to string
-                        if isinstance(content, bytes):
-                            content_str = content.decode("utf-8")
-                        else:
-                            content_str = str(content)
-
-                        applogger.info(
-                            "%s: decoded to string (%d chars), parsing JSON",
-                            consts.LOG_PREFIX,
-                            len(content_str),
-                        )
-
-                        # Parse JSON
-                        batch = json.loads(content_str)
-                        parse_elapsed = time.time() - parse_start
-                        # TODO: REMOVE - Log JSON parsing time
-                        applogger.info(
-                            "%s: JSON parsed successfully (%.2fs), keys=%s",
-                            consts.LOG_PREFIX,
-                            parse_elapsed,
-                            list(batch.keys()) if isinstance(batch, dict) else "array",
-                        )
-                        return batch
-                    except UnicodeDecodeError as exc:
-                        applogger.error(
-                            "%s: Unicode decode error: %s",
-                            consts.LOG_PREFIX,
-                            exc,
-                        )
-                        raise ChronicleApiError(f"Invalid response encoding: {exc}") from exc
-                    except json.JSONDecodeError as exc:
-                        applogger.error(
-                            "%s: JSON decode error: %s, first 500 chars: %s",
-                            consts.LOG_PREFIX,
-                            exc,
-                            content_str[:500] if isinstance(content_str, str) else str(content)[:500],
-                        )
-                        raise ChronicleApiError(f"Invalid JSON response: {exc}") from exc
+                    batch = self._read_stream_batch(response, consts.API_TIMEOUT_SECONDS)
+                    return batch
 
         except httpx.RequestError as exc:
             applogger.error("%s: HTTP request failed: %s", consts.LOG_PREFIX, exc)
@@ -261,6 +174,103 @@ class ChronicleClient:
                 exc,
             )
             raise ChronicleApiError(f"Error: {exc}") from exc
+
+    def _read_stream_batch(self, response: "httpx.Response", timeout_seconds: int) -> dict:
+        """Read and parse first complete JSON batch from streaming response.
+
+        Implements Demisto's line-based parsing with per-message timeout detection.
+        Reads response line-by-line until a complete JSON object is assembled,
+        timing out if no new line arrives within timeout_seconds.
+
+        Args:
+            response: Open httpx streaming response
+            timeout_seconds: Max seconds to wait between line arrivals
+
+        Returns:
+            Parsed JSON batch dict
+        """
+        lines = []
+        last_line_time = time.time()
+
+        try:
+            for line in response.iter_lines(chunk_size=1024 * 1024):
+                # Check for message timeout: no line received for N seconds
+                now = time.time()
+                time_since_last = now - last_line_time
+                if time_since_last > timeout_seconds:
+                    applogger.error(
+                        "%s: No data received for %d seconds, stream timeout",
+                        consts.LOG_PREFIX,
+                        timeout_seconds,
+                    )
+                    raise ChronicleApiError(
+                        f"Stream timeout: no data for {timeout_seconds}s"
+                    )
+
+                if not line or line.isspace():
+                    applogger.debug("%s: received blank line", consts.LOG_PREFIX)
+                    continue
+
+                last_line_time = now
+                lines.append(line)
+                bytes_received = sum(len(l.encode("utf-8")) for l in lines)
+
+                # Log progress every 1 MB
+                if bytes_received > 0 and bytes_received % (1024 * 1024) == 0:
+                    applogger.info(
+                        "%s: stream read... %.2f MB received (%d lines)",
+                        consts.LOG_PREFIX,
+                        bytes_received / (1024 * 1024),
+                        len(lines),
+                    )
+
+                # Try to parse accumulated lines as a complete batch
+                json_text = "".join(lines)
+                try:
+                    batch = json.loads(json_text)
+
+                    # Check for heartbeat
+                    if isinstance(batch, dict) and batch.get("heartbeat"):
+                        applogger.debug("%s: received heartbeat, continuing", consts.LOG_PREFIX)
+                        lines = []
+                        continue
+
+                    # Complete batch received
+                    applogger.info(
+                        "%s: batch received (%.2f MB, %d lines), keys=%s",
+                        consts.LOG_PREFIX,
+                        bytes_received / (1024 * 1024),
+                        len(lines),
+                        list(batch.keys()) if isinstance(batch, dict) else "array",
+                    )
+                    return batch
+
+                except json.JSONDecodeError:
+                    # Incomplete JSON, keep accumulating lines
+                    continue
+
+                except Exception as exc:
+                    applogger.error(
+                        "%s: error parsing batch: %s",
+                        consts.LOG_PREFIX,
+                        exc,
+                    )
+                    raise ChronicleApiError(f"Batch parse error: {exc}") from exc
+
+        except httpx.TimeoutException as exc:
+            applogger.error(
+                "%s: HTTP read timeout during stream: %s",
+                consts.LOG_PREFIX,
+                exc,
+            )
+            raise ChronicleApiError(f"Stream read timeout: {exc}") from exc
+        except Exception as exc:
+            applogger.error(
+                "%s: error reading stream: %s",
+                consts.LOG_PREFIX,
+                exc,
+            )
+            raise ChronicleApiError(f"Stream read error: {exc}") from exc
 
     def _should_retry(self, exc: Exception) -> bool:
         """Check if exception is retryable."""
