@@ -1,11 +1,11 @@
 """Google service account OAuth2 token provider."""
 
-import json
 import time
 from typing import Optional
 
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
+import json
 
 from . import consts
 from .exceptions import ChronicleAuthError
@@ -49,7 +49,13 @@ class GoogleServiceAccountAuth:
         try:
             self._creds.refresh(Request())
             self._token = self._creds.token
-            self._token_expiry = self._calculate_expiry(now)
+
+            # Set expiry: use credential expiry if available, otherwise 3600 seconds
+            if self._creds.expiry:
+                self._token_expiry = self._creds.expiry.timestamp()
+            else:
+                self._token_expiry = now + 3600
+
             applogger.info("%s: acquired new Google access token", consts.LOG_PREFIX)
             return self._token
         except Exception as exc:
@@ -57,8 +63,3 @@ class GoogleServiceAccountAuth:
 
     def _is_token_valid(self, now: float) -> bool:
         return self._token and now < self._token_expiry - consts.TOKEN_EXPIRY_BUFFER_SECONDS
-
-    def _calculate_expiry(self, now: float) -> float:
-        if self._creds.expiry:
-            return now + (self._creds.expiry - self._creds._clock.utcnow()).total_seconds()
-        return now + 3600
