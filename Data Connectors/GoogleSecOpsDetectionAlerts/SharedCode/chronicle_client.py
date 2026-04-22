@@ -150,18 +150,51 @@ class ChronicleClient:
                             status_code=response.status_code,
                         )
 
-                    # Read streaming response
+                    # Read streaming response with timeout and progress tracking
                     applogger.debug("%s: reading streaming response body", consts.LOG_PREFIX)
                     # TODO: REMOVE - JSON parsing time tracking
                     parse_start = time.time()
 
-                    applogger.debug("%s: reading all content from stream", consts.LOG_PREFIX)
-                    content = response.read()
+                    applogger.debug("%s: reading content from stream in chunks", consts.LOG_PREFIX)
+
+                    # Read stream in chunks to avoid blocking forever
+                    chunks = []
+                    chunk_count = 0
+                    bytes_read = 0
+                    chunk_size = 1024 * 1024  # 1 MB chunks
+                    max_chunks = 1000  # Limit to ~1GB max
+
+                    for chunk in response.iter_bytes(chunk_size=chunk_size):
+                        if chunk:
+                            chunks.append(chunk)
+                            bytes_read += len(chunk)
+                            chunk_count += 1
+
+                            # Log progress every 10 chunks (10 MB)
+                            if chunk_count % 10 == 0:
+                                applogger.debug(
+                                    "%s: reading stream... %d MB received (%d chunks)",
+                                    consts.LOG_PREFIX,
+                                    bytes_read / (1024 * 1024),
+                                    chunk_count,
+                                )
+
+                            # Safety limit: stop if too much data
+                            if chunk_count > max_chunks:
+                                applogger.error(
+                                    "%s: Stream reading exceeded max chunks (%d), stopping",
+                                    consts.LOG_PREFIX,
+                                    max_chunks,
+                                )
+                                break
+
+                    content = b"".join(chunks)
                     content_size = len(content)
                     applogger.debug(
-                        "%s: stream read complete (%d bytes)",
+                        "%s: stream read complete (%d bytes in %d chunks)",
                         consts.LOG_PREFIX,
                         content_size,
+                        chunk_count,
                     )
 
                     # Warn if very large
@@ -173,8 +206,22 @@ class ChronicleClient:
                         )
 
                     try:
-                        applogger.debug("%s: decoding JSON from stream", consts.LOG_PREFIX)
-                        batch = json.loads(content)
+                        applogger.debug("%s: decoding JSON from stream bytes", consts.LOG_PREFIX)
+
+                        # Decode bytes to string
+                        if isinstance(content, bytes):
+                            content_str = content.decode("utf-8")
+                        else:
+                            content_str = str(content)
+
+                        applogger.debug(
+                            "%s: decoded to string (%d chars), parsing JSON",
+                            consts.LOG_PREFIX,
+                            len(content_str),
+                        )
+
+                        # Parse JSON
+                        batch = json.loads(content_str)
                         parse_elapsed = time.time() - parse_start
                         # TODO: REMOVE - Log JSON parsing time
                         applogger.debug(
@@ -184,12 +231,19 @@ class ChronicleClient:
                             list(batch.keys()) if isinstance(batch, dict) else "array",
                         )
                         return batch
-                    except json.JSONDecodeError as exc:
+                    except UnicodeDecodeError as exc:
                         applogger.error(
-                            "%s: JSON decode error: %s, first 500 bytes: %s",
+                            "%s: Unicode decode error: %s",
                             consts.LOG_PREFIX,
                             exc,
-                            content[:500],
+                        )
+                        raise ChronicleApiError(f"Invalid response encoding: {exc}") from exc
+                    except json.JSONDecodeError as exc:
+                        applogger.error(
+                            "%s: JSON decode error: %s, first 500 chars: %s",
+                            consts.LOG_PREFIX,
+                            exc,
+                            content_str[:500] if isinstance(content_str, str) else str(content)[:500],
                         )
                         raise ChronicleApiError(f"Invalid JSON response: {exc}") from exc
 
