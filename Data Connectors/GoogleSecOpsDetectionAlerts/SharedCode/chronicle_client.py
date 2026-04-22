@@ -193,7 +193,7 @@ class ChronicleClient:
         last_line_time = time.time()
 
         try:
-            for line in response.iter_lines(chunk_size=1024 * 1024):
+            for line in response.iter_lines():
                 # Check for message timeout: no line received for N seconds
                 now = time.time()
                 time_since_last = now - last_line_time
