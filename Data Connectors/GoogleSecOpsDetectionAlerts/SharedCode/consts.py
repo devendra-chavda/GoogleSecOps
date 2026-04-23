@@ -1,6 +1,7 @@
 """Constants and configurations for the Google SecOps Detection Alerts connector."""
 
 import os
+from .utils import parse_cron_timeout
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_LEVEL = os.environ.get("LogLevel", "INFO")
@@ -48,7 +49,8 @@ RETRY_BASE_DELAY_SECONDS = 2
 # After this many consecutive stream failures the fetcher gives up for this run.
 MAX_CONSECUTIVE_FAILURES = 7
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-FUNCTION_APP_TIMEOUT_SECONDS = os.environ.get("Schedule", "0 */10 * * * *")
+# Function app timeout computed from Schedule CRON expression (e.g., "0 */10 * * * *" → 570 seconds)
+FUNCTION_APP_TIMEOUT_SECONDS = int(parse_cron_timeout())
 
 # ── Data file settings ────────────────────────────────────────────────────────
 # Raw detection files are named:  google_secops_raw_<epoch>_<file_index>

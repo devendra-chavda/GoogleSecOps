@@ -24,6 +24,7 @@ class GoogleSecOpsToStorage:
             file_path=consts.CHECKPOINT_FILE_NAME,
             share_name=consts.FILE_SHARE_NAME,
         )
+        self._start_time = int(time.time())
 
     def _validate_env_vars(self) -> None:
         required = [
@@ -121,12 +122,13 @@ class GoogleSecOpsToStorage:
                 exc,
             )
 
+        runtime = time.time() - (self._start_time)
         applogger.info(
             "%s (%s): complete (responses saved=%d, runtime=%.1f seconds)",
             consts.LOG_PREFIX,
             method,
             batch_count,
-            time.time() - (deadline - consts.FUNCTION_APP_TIMEOUT_SECONDS),
+            runtime,
         )
 
     def _write_response_to_file(self, response: dict, index: int) -> None:
