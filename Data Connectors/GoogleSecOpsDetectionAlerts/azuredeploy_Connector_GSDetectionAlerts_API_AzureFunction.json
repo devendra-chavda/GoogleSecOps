@@ -171,60 +171,72 @@
           "name": "[concat(parameters('GCSDetectionAlertsTableName'), '_CL')]",
           "columns": [
             {
-              "name": "TimeGenerated",
-              "type": "datetime"
-            },
-            {
-              "name": "detection_id",
-              "type": "string"
-            },
-            {
               "name": "DetectionType",
               "type": "string"
             },
             {
-              "name": "detection_time",
+              "name": "detection",
+              "type": "dynamic"
+            },
+            {
+              "name": "createdTime",
               "type": "datetime"
             },
             {
-              "name": "rule_id",
+              "name": "id",
               "type": "string"
             },
             {
-              "name": "rule_name",
-              "type": "string"
-            },
-            {
-              "name": "rule_version",
-              "type": "string"
-            },
-            {
-              "name": "rule_labels",
+              "name": "timeWindow",
               "type": "dynamic"
             },
             {
-              "name": "severity",
-              "type": "string"
+              "name": "timeWindow_startTime",
+              "type": "datetime"
             },
             {
-              "name": "summary",
-              "type": "string"
+              "name": "timeWindow_endTime",
+              "type": "datetime"
             },
             {
-              "name": "url_back_to_product",
-              "type": "string"
-            },
-            {
-              "name": "collection_elements",
+              "name": "collectionElements",
               "type": "dynamic"
             },
             {
-              "name": "alert_state",
+              "name": "detectionTime",
+              "type": "datetime"
+            },
+            {
+              "name": "detectionTimingDetails",
+              "type": "dynamic"
+            },
+            {
+              "name": "latencyMetrics",
+              "type": "dynamic"
+            },
+            {
+              "name": "latencyMetrics_oldestIngestionTime",
+              "type": "datetime"
+            },
+            {
+              "name": "latencyMetrics_newestIngestionTime",
+              "type": "datetime"
+            },
+            {
+              "name": "latencyMetrics_oldestEventTime",
+              "type": "datetime"
+            },
+            {
+              "name": "latencyMetrics_newestEventTime",
+              "type": "datetime"
+            },
+            {
+              "name": "latencyMetrics_ingestionLatency",
               "type": "string"
             },
             {
-              "name": "detector_id",
-              "type": "string"
+              "name": "TimeGenerated",
+              "type": "datetime"
             }
           ]
         },
@@ -246,56 +258,72 @@
           "[concat('Custom-', parameters('GCSDetectionAlertsTableName'))]": {
             "columns": [
               {
-                "name": "detection_id",
-                "type": "string"
-              },
-              {
                 "name": "type",
                 "type": "string"
               },
               {
-                "name": "detection_time",
+                "name": "detection",
+                "type": "dynamic"
+              },
+              {
+                "name": "createdTime",
                 "type": "datetime"
               },
               {
-                "name": "rule_id",
+                "name": "id",
                 "type": "string"
               },
               {
-                "name": "rule_name",
-                "type": "string"
-              },
-              {
-                "name": "rule_version",
-                "type": "string"
-              },
-              {
-                "name": "rule_labels",
+                "name": "timeWindow",
                 "type": "dynamic"
               },
               {
-                "name": "severity",
-                "type": "string"
+                "name": "timeWindow_startTime",
+                "type": "datetime"
               },
               {
-                "name": "summary",
-                "type": "string"
+                "name": "timeWindow_endTime",
+                "type": "datetime"
               },
               {
-                "name": "url_back_to_product",
-                "type": "string"
-              },
-              {
-                "name": "collection_elements",
+                "name": "collectionElements",
                 "type": "dynamic"
               },
               {
-                "name": "alert_state",
+                "name": "detectionTime",
+                "type": "datetime"
+              },
+              {
+                "name": "detectionTimingDetails",
+                "type": "dynamic"
+              },
+              {
+                "name": "latencyMetrics",
+                "type": "dynamic"
+              },
+              {
+                "name": "latencyMetrics_oldestIngestionTime",
+                "type": "datetime"
+              },
+              {
+                "name": "latencyMetrics_newestIngestionTime",
+                "type": "datetime"
+              },
+              {
+                "name": "latencyMetrics_oldestEventTime",
+                "type": "datetime"
+              },
+              {
+                "name": "latencyMetrics_newestEventTime",
+                "type": "datetime"
+              },
+              {
+                "name": "latencyMetrics_ingestionLatency",
                 "type": "string"
               },
               {
-                "name": "detector_id",
-                "type": "string"
+                "name": "TimeGenerated",
+                "type": "datetime"
               }
             ]
           }
@@ -316,7 +344,7 @@
             "destinations": [
               "[concat('RuleDest', variables('suffix'))]"
             ],
-            "transformKql": "source\n| extend TimeGenerated = todatetime(detection_time) | project-rename DetectionType = ['type']",
+            "transformKql": "source\n| extend TimeGenerated = todatetime(now()), json_timeWindow = parse_json(timeWindow), json_latencyMetrics = parse_json(latencyMetrics)\n| extend timeWindow_startTime = todatetime(json_timeWindow.startTime), timeWindow_endTime = todatetime(json_timeWindow.endTime), latencyMetrics_oldestIngestionTime = todatetime(json_latencyMetrics.oldestIngestionTime), latencyMetrics_newestIngestionTime = todatetime(json_latencyMetrics.newestIngestionTime), latencyMetrics_oldestEventTime = todatetime(json_latencyMetrics.oldestEventTime), latencyMetrics_newestEventTime = todatetime(json_latencyMetrics.newestEventTime), latencyMetrics_ingestionLatency = tostring(json_latencyMetrics.ingestionLatency)\n| project-away json_timeWindow, timeWindow, json_latencyMetrics, latencyMetrics\n | project-rename DetectionType = ['type']",
             "outputStream": "[concat('Custom-', parameters('GCSDetectionAlertsTableName'), '_CL')]"
           }
         ]

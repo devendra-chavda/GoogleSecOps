@@ -5,7 +5,7 @@
       "name": "mytimer",
       "type": "timerTrigger",
       "direction": "in",
-      "schedule": "%FetcherSchedule%",
+      "schedule": "%Schedule%",
       "useMonitor": true
     }
   ]

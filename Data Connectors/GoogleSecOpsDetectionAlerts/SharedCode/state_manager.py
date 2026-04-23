@@ -77,9 +77,7 @@ class StateManager:
             "yes" if page_token else "no",
         )
 
-    def resolve_initial_start_time(
-        self, input_start_time: str, lookback_days: int = consts.LOOKBACK_DAYS
-    ) -> Tuple[str, Optional[str]]:
+    def resolve_initial_start_time(self) -> Tuple[str, Optional[str]]:
         """Get start time and token for next API call.
 
         Logic:
@@ -104,12 +102,7 @@ class StateManager:
                 return page_start, page_token
 
         # No checkpoint: use provided start time or compute from lookback
-        lookback = min(lookback_days, consts.MAX_LOOKBACK_DAYS)
-        if input_start_time:
-            applogger.info(
-                "%s: using InputStartTime=%s", consts.LOG_PREFIX, input_start_time
-            )
-            return input_start_time, None
+        lookback = min(consts.LOOKBACK_DAYS, consts.MAX_LOOKBACK_DAYS)
 
         start_time = self._compute_start_time(lookback)
         applogger.info(

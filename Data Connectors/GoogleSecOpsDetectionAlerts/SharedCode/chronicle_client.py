@@ -66,8 +66,7 @@ class ChronicleClient:
 
             failures = 0
             next_token = batch.get("nextPageToken")
-            next_start = batch.get("nextPageStartTime") or batch.get("continuationTime")
-
+            next_start = batch.get("nextPageStartTime")
             applogger.info(
                 "%s: batch received (token=%s start=%s)",
                 consts.LOG_PREFIX,

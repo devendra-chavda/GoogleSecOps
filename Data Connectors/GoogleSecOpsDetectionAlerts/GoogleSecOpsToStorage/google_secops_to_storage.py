@@ -44,9 +44,7 @@ class GoogleSecOpsToStorage:
     def run(self) -> None:
         """Fetch and save each API response immediately."""
         method = inspect.currentframe().f_code.co_name
-        page_start, page_token = self._checkpoint.resolve_initial_start_time(
-            "", consts.LOOKBACK_DAYS
-        )
+        page_start, page_token = self._checkpoint.resolve_initial_start_time()
         applogger.info(
             "%s (%s): starting (start=%s token=%s timeout=%ds)",
             consts.LOG_PREFIX,
