@@ -1,4 +1,4 @@
-"""Handle the logger."""
+"""Logger configuration for Google SecOps connector."""
 
 import logging
 import sys
@@ -12,12 +12,9 @@ LOG_LEVELS = {
     "ERROR": logging.ERROR,
 }
 
-try:
-    applogger = logging.getLogger("azure")
-    applogger.setLevel(LOG_LEVELS.get(consts.LOG_LEVEL.upper(), logging.INFO))
-except Exception:
-    applogger = logging.getLogger("azure")
-    applogger.setLevel(logging.INFO)
-finally:
-    handler = logging.StreamHandler(stream=sys.stdout)
-    applogger.addHandler(handler)
+applogger = logging.getLogger("azure")
+log_level = LOG_LEVELS.get(consts.LOG_LEVEL.upper(), logging.INFO)
+applogger.setLevel(log_level)
+
+handler = logging.StreamHandler(stream=sys.stdout)
+applogger.addHandler(handler)

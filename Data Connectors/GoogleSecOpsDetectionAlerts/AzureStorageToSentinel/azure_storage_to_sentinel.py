@@ -1,4 +1,8 @@
-"""Read detection responses and ingest to Sentinel in real-time."""
+"""Ingest detection responses from Azure File Share into Microsoft Sentinel.
+
+Monitors for response files saved by GoogleSecOpsToStorage and posts
+detections to Sentinel via the Log Analytics DCR API.
+"""
 
 import inspect
 import json
@@ -12,13 +16,12 @@ from ..SharedCode.logger import applogger
 from ..SharedCode.sentinel import post_data
 from ..SharedCode.state_manager import StateManager
 
-_BATCH_SIZE = 500
-
 
 class AzureStorageToSentinel:
-    """Process response files and post detections to Sentinel."""
+    """Read response files from Azure File Share and post detections to Sentinel."""
 
     def __init__(self) -> None:
+        """Initialize Azure File Share client."""
         self._data_dir = ShareDirectoryClient.from_connection_string(
             conn_str=consts.CONN_STRING,
             share_name=consts.FILE_SHARE_NAME_DATA,
@@ -26,172 +29,200 @@ class AzureStorageToSentinel:
         )
 
     def run(self) -> None:
-        """Process response files with retry every 5 minutes for new files."""
+        """Process response files from Azure File Share and post to Sentinel."""
         method = inspect.currentframe().f_code.co_name
         deadline = time.time() + consts.FUNCTION_APP_TIMEOUT_SECONDS
+
+        # Counters for tracking pipeline flow
+        total_extracted = 0
         total_posted = 0
-        check_interval = 300  # 5 minutes
-        last_check = time.time()
+        files_processed = 0
+        last_check_time = time.time()
 
         applogger.info(
-            "%s (%s): starting with timeout=%ds, checking every %ds",
+            "%s (%s): starting (timeout=%ds, check interval=%ds)",
             consts.LOG_PREFIX,
             method,
             consts.FUNCTION_APP_TIMEOUT_SECONDS,
-            check_interval,
+            consts.FILE_CHECK_INTERVAL_SECONDS,
         )
 
         while time.time() < deadline:
-            # Check for files if interval has passed or first iteration
-            if time.time() - last_check >= check_interval or last_check == time.time():
+            # Check for files at configured interval
+            time_since_last_check = time.time() - last_check_time
+            should_check_files = (
+                time_since_last_check >= consts.FILE_CHECK_INTERVAL_SECONDS
+                or last_check_time == time.time()  # First iteration
+            )
+
+            if should_check_files:
                 file_names = self._list_eligible_files()
-                last_check = time.time()
+                last_check_time = time.time()
 
                 if file_names:
-                    applogger.info(
-                        "%s (%s): processing %d response files",
-                        consts.LOG_PREFIX,
-                        method,
-                        len(file_names),
-                    )
-
                     for filename in file_names:
                         try:
-                            posted = self._process_response_file(filename)
+                            extracted, posted = self._process_response_file(filename)
+                            total_extracted += extracted
                             total_posted += posted
+                            files_processed += 1
+                            applogger.info(
+                                "%s: progress (files=%d, extracted=%d, posted=%d)",
+                                consts.LOG_PREFIX,
+                                files_processed,
+                                total_extracted,
+                                total_posted,
+                            )
                         except Exception:
                             applogger.exception(
-                                "%s: error processing %s", consts.LOG_PREFIX, filename
+                                "%s: error processing file %s",
+                                consts.LOG_PREFIX,
+                                filename,
                             )
                 else:
                     remaining = deadline - time.time()
-                    applogger.info(
-                        "%s: no files found, will check again in %ds (%.0f seconds remaining)",
+                    applogger.debug(
+                        "%s: no files ready, will recheck in %ds (%.0f seconds remaining)",
                         consts.LOG_PREFIX,
-                        check_interval,
+                        consts.FILE_CHECK_INTERVAL_SECONDS,
                         remaining,
                     )
 
-            # Sleep briefly to avoid busy loop
-            time.sleep(10)
+            # Brief sleep to avoid busy spinning
+            time.sleep(consts.BUSY_WAIT_SLEEP_SECONDS)
 
         applogger.info(
-            "%s (%s): complete (total events posted=%d)",
+            "%s (%s): complete (files processed=%d, extracted=%d, posted=%d)",
             consts.LOG_PREFIX,
             method,
+            files_processed,
+            total_extracted,
             total_posted,
         )
 
     def _list_eligible_files(self) -> list:
-        """List response files ready for ingestion.
+        """List response files ready for ingestion (aged files only).
 
-        Skips files younger than MAX_FILE_AGE_FOR_INGESTION to avoid
-        race condition where fetcher is still writing.
+        Filters out files younger than MAX_FILE_AGE_FOR_INGESTION to avoid
+        race conditions where the fetcher is still writing.
+
+        Returns:
+            List of filenames sorted by creation time (oldest first).
         """
         try:
             entries = list(
                 self._data_dir.list_directories_and_files(consts.FILE_NAME_PREFIX)
             )
-            files = [e["name"] for e in entries if not e.get("is_directory")]
+            all_files = [e["name"] for e in entries if not e.get("is_directory")]
         except ResourceNotFoundError:
-            applogger.info("%s: data share not found yet", consts.LOG_PREFIX)
+            applogger.debug("%s: data share not initialized yet", consts.LOG_PREFIX)
             return []
         except Exception:
-            applogger.exception("%s: error listing files", consts.LOG_PREFIX)
+            applogger.exception("%s: error listing files in share", consts.LOG_PREFIX)
             return []
 
+        if not all_files:
+            return []
+
+        # Filter: only include files older than MAX_FILE_AGE_FOR_INGESTION
         now = int(time.time())
-        eligible = [
+        eligible_files = [
             f
-            for f in files
+            for f in all_files
             if now - self._get_epoch(f) > consts.MAX_FILE_AGE_FOR_INGESTION
         ]
-        eligible.sort(key=self._get_epoch)
+        eligible_files.sort(key=self._get_epoch)
 
-        applogger.info(
-            "%s: found %d files, %d eligible",
-            consts.LOG_PREFIX,
-            len(files),
-            len(eligible),
-        )
-        return eligible
+        if eligible_files:
+            applogger.info(
+                "%s: found %d files (total), %d eligible (aged >%ds)",
+                consts.LOG_PREFIX,
+                len(all_files),
+                len(eligible_files),
+                consts.MAX_FILE_AGE_FOR_INGESTION,
+            )
+
+        return eligible_files
 
     @staticmethod
     def _get_epoch(filename: str) -> int:
-        """Extract epoch from filename: google_secops_raw_<epoch>_<index>."""
+        """Extract epoch timestamp from filename.
+
+        Filename format: google_secops_raw_<epoch>_<index>
+        """
         try:
-            return int(filename.split("_")[3])
+            parts = filename.split("_")
+            return int(parts[3])
         except (IndexError, ValueError):
             return 0
 
-    def _process_response_file(self, filename: str) -> int:
-        """Read response file and post detections to Sentinel.
+    def _process_response_file(self, filename: str) -> tuple:
+        """Read response file, extract detections, post to Sentinel, and delete.
 
-        Process: Read → Extract detections → Post → Delete
+        Returns:
+            Tuple of (detections_extracted, detections_posted)
         """
-        applogger.info("%s: processing response file: %s", consts.LOG_PREFIX, filename)
-
         sm = StateManager(
             connection_string=consts.CONN_STRING,
             file_path=filename,
             share_name=consts.FILE_SHARE_NAME_DATA,
         )
 
-        # Step 1: Read response file
-        raw = sm.get()
-        if not raw:
-            applogger.warning("%s: empty file %s", consts.LOG_PREFIX, filename)
+        # Read and validate file
+        raw_content = sm.get()
+        if not raw_content:
+            applogger.warning("%s: empty file, skipping: %s", consts.LOG_PREFIX, filename)
             sm.delete()
-            return 0
+            return 0, 0
 
-        # Step 2: Parse JSON response
+        # Parse JSON response
         try:
-            response = json.loads(raw)
+            response = json.loads(raw_content)
         except json.JSONDecodeError as err:
             applogger.error(
-                "%s: JSON parse error in %s: %s", consts.LOG_PREFIX, filename, err
+                "%s: invalid JSON in %s: %s",
+                consts.LOG_PREFIX,
+                filename,
+                err,
             )
-            return 0
+            return 0, 0
 
-        # Step 3: Log full response received
-        applogger.info(
-            "%s: response parsed, keys=%s",
+        applogger.debug(
+            "%s: parsed response from %s (keys=%s)",
             consts.LOG_PREFIX,
-            list(response.keys()) if isinstance(response, dict) else "array",
+            filename,
+            list(response.keys()) if isinstance(response, dict) else "N/A",
         )
-        applogger.debug("%s: response content: %s", consts.LOG_PREFIX, raw)
 
-        # Step 4: Extract detections from response
+        # Extract detections
         detections = self._extract_detections(response)
         if not detections:
-            applogger.info("%s: no detections in %s", consts.LOG_PREFIX, filename)
+            applogger.info("%s: no detections found in %s", consts.LOG_PREFIX, filename)
             sm.delete()
-            return 0
+            return 0, 0
 
+        extracted_count = len(detections)
         applogger.info(
             "%s: extracted %d detections from %s",
             consts.LOG_PREFIX,
-            len(detections),
+            extracted_count,
             filename,
         )
 
-        # Step 5: Post detections to Sentinel
-        posted = self._post_to_sentinel(detections, filename)
+        # Post to Sentinel
+        posted_count = self._post_to_sentinel(detections, filename)
 
-        # Step 6: Delete file after successful post
+        # Cleanup
         sm.delete()
-        applogger.info(
-            "%s: posted %d events, file deleted: %s",
-            consts.LOG_PREFIX,
-            posted,
-            filename,
-        )
 
-        return posted
+        return extracted_count, posted_count
 
     @staticmethod
-    def _extract_detections(response):
-        """Extract detections array from API response."""
+    def _extract_detections(response) -> list:
+        """Extract detections array from API response.
+
+        Handles both dict responses (with 'detections' key) and array responses.
+        """
         if isinstance(response, dict):
             return response.get("detections") or []
         if isinstance(response, list):
@@ -201,30 +232,53 @@ class AzureStorageToSentinel:
     def _post_to_sentinel(self, detections: list, filename: str) -> int:
         """Post detections to Sentinel in batches.
 
-        Posts in chunks of 500 events at a time.
+        Posts in chunks of INGESTION_BATCH_SIZE events per API call.
+
+        Args:
+            detections: List of detection events to post
+            filename: Source filename (for logging)
+
+        Returns:
+            Number of events successfully posted
         """
+        total_count = len(detections)
+        batch_count = (total_count + consts.INGESTION_BATCH_SIZE - 1) // consts.INGESTION_BATCH_SIZE
+
         applogger.info(
-            "%s: posting %d events to Sentinel (batch size=%d)",
+            "%s: posting %d events (%d batches × %d)",
             consts.LOG_PREFIX,
-            len(detections),
-            _BATCH_SIZE,
+            total_count,
+            batch_count,
+            consts.INGESTION_BATCH_SIZE,
         )
 
-        posted = 0
-        for i in range(0, len(detections), _BATCH_SIZE):
-            chunk = detections[i : i + _BATCH_SIZE]
-            body = json.dumps(chunk)
+        posted_count = 0
+        for batch_num, start_idx in enumerate(
+            range(0, total_count, consts.INGESTION_BATCH_SIZE), 1
+        ):
+            end_idx = min(start_idx + consts.INGESTION_BATCH_SIZE, total_count)
+            batch = detections[start_idx:end_idx]
+            batch_size = len(batch)
 
-            # Post this chunk to Sentinel
-            post_data(body, consts.DCR_STREAM_NAME)
-            posted += len(chunk)
+            # Post batch to Sentinel
+            post_data(json.dumps(batch), consts.DCR_STREAM_NAME)
+            posted_count += batch_size
 
             applogger.info(
-                "%s: batch %d-%d posted (%d events)",
+                "%s: batch %d/%d posted (events %d-%d, %d events)",
                 consts.LOG_PREFIX,
-                i + 1,
-                i + len(chunk),
-                len(chunk),
+                batch_num,
+                batch_count,
+                start_idx + 1,
+                end_idx,
+                batch_size,
             )
 
-        return posted
+        applogger.info(
+            "%s: completed posting from %s (all %d batches)",
+            consts.LOG_PREFIX,
+            filename,
+            batch_count,
+        )
+
+        return posted_count

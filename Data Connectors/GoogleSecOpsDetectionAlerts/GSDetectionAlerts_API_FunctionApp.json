@@ -2,8 +2,7 @@
     "id": "GSDetectionAlerts",
     "title": "Google SecOps Detection Alerts (using Azure Functions)",
     "publisher": "Google",
-    "descriptionMarkdown": "The [Google SecOps](https://cloud.google.com/security/products/security-operations) (formerly Chronicle) data connector provides the capability to ingest detection alerts from Google SecOps into Microsoft Sentinel using the [legacyStreamDetectionAlerts](https://cloud.google.com/chronicle/docs/reference/rest/v1alpha/projects.locations.instances.legacy/legacyStreamDetectionAlerts) API.\n\nThis connector deploys an Azure Function App that polls the Google SecOps API on a configurable schedule and sends detection alerts to a custom Log Analytics table (`GCSDetectionAlerts_CL`) via the Logs Ingestion API (DCR).\n\n**Underlying Microsoft Technologies used:**\n\nThis solution depends on the following technologies, and some of which may be in [Preview](https://azure.microsoft.com/support/legal/preview-supplemental-terms/) state or may incur additional ingestion or operational costs:\n\n- [Azure Functions](https://azure.microsoft.com/services/functions/#overview)",
-    "additionalRequirementBanner": "These queries are dependent on parsers based on Kusto Functions deployed as part of the solution.",
+    "descriptionMarkdown": "The [Google SecOps](https://cloud.google.com/security/products/security-operations) (formerly Chronicle) data connector provides the capability to ingest detection alerts from Google SecOps into Microsoft Sentinel using the [legacyStreamDetectionAlerts](https://cloud.google.com/chronicle/docs/reference/rest/v1alpha/projects.locations.instances.legacy/legacyStreamDetectionAlerts) API.\n\n## Architecture\n\nThis connector uses a **two-function polling design**:\n\n1. **GoogleSecOpsToStorage**: Polls the Google SecOps API on a configurable schedule and saves raw detection batches to Azure File Share\n2. **AzureStorageToSentinel**: Monitors the file share and ingests saved detections into Microsoft Sentinel via the Logs Ingestion API (DCR)\n\nKey features:\n- **Real-time polling**: Configurable schedule (default: every 10 minutes)\n- **Checkpoint management**: Tracks pagination tokens and time windows to prevent data loss\n- **Automatic lookback**: On first run, pulls data from N days ago (configurable 1-7 days, default 1)\n- **Streaming response handling**: Handles large API responses with per-message timeout detection\n- **Raw data preservation**: Saves complete API responses for audit and reprocessing\n- **Sentinel DCR integration**: Posts detection alerts to custom table via Azure Monitor Ingestion API\n\n**Underlying Microsoft Technologies used:**\n\nThis solution depends on the following technologies, and some of which may be in [Preview](https://azure.microsoft.com/support/legal/preview-supplemental-terms/) state or may incur additional ingestion or operational costs:\n\n- [Azure Functions](https://azure.microsoft.com/services/functions/) (Python 3.12 runtime)\n- [Azure File Share](https://azure.microsoft.com/services/storage/files/) (for checkpoint and raw data storage)\n- [Azure Monitor Ingestion API](https://docs.microsoft.com/azure/azure-monitor/logs/logs-ingestion-api-overview) (DCR-based)\n- [Azure Key Vault](https://azure.microsoft.com/services/key-vault/) (optional for credential storage)",
     "graphQueries": [
         {
             "metricName": "Total detection alerts received",
@@ -13,7 +12,7 @@
     ],
     "sampleQueries": [
         {
-            "description": "All detection alerts",
+            "description": "All detection alerts (latest first)",
             "query": "GCSDetectionAlerts_CL\n | sort by detection_time desc\n | take 10"
         },
         {
@@ -23,6 +22,10 @@
         {
             "description": "Active alerts by rule name",
             "query": "GCSDetectionAlerts_CL\n | where alert_state == 'ALERTING'\n | summarize Count=count() by rule_name\n | sort by Count desc\n | take 10"
+        },
+        {
+            "description": "Detection trends by hour",
+            "query": "GCSDetectionAlerts_CL\n | extend Hour = bin(detection_time, 1h)\n | summarize Count=count() by Hour, severity\n | render columnchart"
         }
     ],
     "dataTypes": [
@@ -35,7 +38,7 @@
         {
             "type": "IsConnectedQuery",
             "value": [
-                "GCSDetectionAlerts_CL\n            | summarize LastLogReceived = max(TimeGenerated)\n            | project IsConnected = LastLogReceived > ago(7d)"
+                "GCSDetectionAlerts_CL\n            | summarize LastLogReceived = max(TimeGenerated)\n            | project IsConnected = LastLogReceived > ago(30d)"
             ]
         }
     ],
@@ -57,12 +60,23 @@
                 }
             },
             {
-                "provider": "Microsoft.OperationalInsights/workspaces/sharedKeys",
-                "permissionsDisplayText": "Read permissions to shared keys for the workspace are required. [See the documentation to learn more about workspace keys](https://docs.microsoft.com/azure/azure-monitor/platform/agent-windows#obtain-workspace-id-and-key).",
-                "providerDisplayName": "Keys",
+                "provider": "Microsoft.Insights/dataCollectionRules",
+                "permissionsDisplayText": "Write permissions to Data Collection Rules are required.",
+                "providerDisplayName": "Data Collection Rules",
                 "scope": "Workspace",
                 "requiredPermissions": {
-                    "action": true
+                    "write": true,
+                    "read": true
+                }
+            },
+            {
+                "provider": "Microsoft.Insights/dataCollectionEndpoints",
+                "permissionsDisplayText": "Write permissions to Data Collection Endpoints are required.",
+                "providerDisplayName": "Data Collection Endpoints",
+                "scope": "Workspace",
+                "requiredPermissions": {
+                    "write": true,
+                    "read": true
                 }
             }
         ],
@@ -72,6 +86,14 @@
                 "description": "Read and write permissions to Azure Functions to create a Function App is required. [See the documentation to learn more about Azure Functions](https://docs.microsoft.com/azure/azure-functions/)."
             },
             {
+                "name": "Microsoft.Storage/storageAccounts permissions",
+                "description": "Read and write permissions to Azure Storage Account for File Share operations are required."
+            },
+            {
+                "name": "Microsoft Entra ID App Registration",
+                "description": "An app registration with API permissions for Azure Monitor Ingestion is required for posting data to Sentinel."
+            },
+            {
                 "name": "Google Cloud Service Account",
                 "description": "A Google Cloud service account with Chronicle API access is required. The service account JSON key must be provided during deployment. [See the documentation to learn more about Google SecOps API access](https://cloud.google.com/chronicle/docs/reference/rest)."
             }
@@ -79,55 +101,36 @@
     },
     "instructionSteps": [
         {
-            "title": "",
-            "description": ">**NOTE:** This connector uses Azure Functions to connect to the Google SecOps API to pull detection alerts into Microsoft Sentinel. This might result in additional data ingestion costs from Azure. Check the [Azure Functions pricing page](https://azure.microsoft.com/pricing/details/functions/) for details."
+            "title": "Information",
+            "description": ">**NOTE:** This connector uses two Azure Functions to connect to the Google SecOps API:\n\n- **GoogleSecOpsToStorage**: Polls the Google SecOps API on a schedule and saves raw detection batches to Azure File Share\n- **AzureStorageToSentinel**: Monitors the file share and ingests saved detections into Microsoft Sentinel\n\nThis architecture ensures zero data loss with checkpoint management and prevents duplicate ingestion."
         },
         {
-            "title": "",
-            "description": ">**(Optional Step)** Securely store workspace and API authorization key(s) or token(s) in Azure Key Vault. Azure Key Vault provides a secure mechanism to store and retrieve key values. [Follow these instructions](https://docs.microsoft.com/azure/app-service/app-service-key-vault-references) to use Azure Key Vault with an Azure Function App."
+            "title": "Cost Warning",
+            "description": ">**NOTE:** This connector uses Azure Functions and Azure Storage, which may result in additional costs. Review pricing:\n- [Azure Functions pricing](https://azure.microsoft.com/pricing/details/functions/)\n- [Azure Storage pricing](https://azure.microsoft.com/pricing/details/storage/blobs/)"
         },
         {
-            "description": ">**NOTE:** This data connector depends on a parser based on a Kusto Function to work as expected which is deployed as part of the solution."
+            "title": "Optional: Secure Credentials",
+            "description": ">**(Optional Step)** Securely store the Google service account JSON in Azure Key Vault. [Follow these instructions](https://docs.microsoft.com/azure/app-service/app-service-key-vault-references) to use Azure Key Vault with an Azure Function App."
         },
         {
-            "title": "",
-            "description": "**STEP 1 - Google SecOps Configuration**\n\n1. Ensure you have a Google SecOps (Chronicle) instance.\n2. Go to the [Google Cloud Console](https://console.cloud.google.com/) and select the project associated with your Google SecOps instance.\n3. Navigate to **IAM & Admin > Service Accounts** and click **Create Service Account**.\n4. Enter a name (e.g., `chronicle-api-sa`) and click **Create and Continue**.\n5. Assign the role that includes the permission `chronicle.legacies.legacyStreamDetectionAlerts` and click **Done**.\n6. Open the created service account, go to the **Keys** tab, click **Add Key > Create new key**, select **JSON**, and click **Create**.\n7. The JSON file will be downloaded. This contains your service account credentials.\n8. Note down your **Chronicle Project ID**, **Region**, and **Instance ID** from the Google SecOps console."
+            "title": "Google SecOps Configuration",
+            "description": "**Step 1: Set up Google SecOps Service Account**\n\n1. Ensure you have a Google SecOps (Chronicle) instance\n2. Go to the [Google Cloud Console](https://console.cloud.google.com/) and select the project associated with your Google SecOps instance\n3. Navigate to **IAM & Admin > Service Accounts** and click **Create Service Account**\n4. Enter a name (e.g., `chronicle-api-sa`) and click **Create and Continue**\n5. Assign a role with permission: `chronicle.legacies.legacyStreamDetectionAlerts`\n6. Click **Create key** > **JSON** to download the service account credentials\n7. Note down your **Chronicle Project ID**, **Region**, and **Instance ID** from the Google SecOps console"
         },
         {
-            "title": "",
-            "description": "**STEP 2 - App Registration steps for the Application in Microsoft Entra ID**\n\n This integration requires an App registration in the Azure portal. Follow the steps to create a new application:\n 1. Sign in to the [Azure portal](https://portal.azure.com/).\n 2. Search for and select **Microsoft Entra ID**.\n 3. Under **Manage**, select **App registrations > New registration**.\n 4. Enter a display **Name** for your application.\n 5. Select **Register** to complete the initial app registration.\n 6. Record the **Application (client) ID** and **Tenant ID**."
+            "title": "Azure App Registration",
+            "description": "**Step 2: Create App Registration for Sentinel Ingestion**\n\n1. Sign in to the [Azure portal](https://portal.azure.com/)\n2. Search for and select **Microsoft Entra ID**\n3. Under **Manage**, select **App registrations > New registration**\n4. Enter a display **Name** (e.g., `gcs-detection-alerts-app`)\n5. Select **Register**\n6. Record the **Application (client) ID** and **Tenant ID**\n7. Under **Certificates & secrets**, create a **New client secret** and save the value\n8. Under **API permissions**, add **Monitoring.Write** for Azure Monitor Ingestion"
         },
         {
-            "title": "",
-            "description": "**STEP 3 - Add a client secret for application in Microsoft Entra ID**\n\n Sometimes called an application password, a client secret is a string value required for the execution of this Data Connector. Follow the steps in this section to create a new Client Secret:\n 1. In the Azure portal, in **App registrations**, select your application.\n 2. Select **Certificates & secrets > Client secrets > New client secret**.\n 3. Add a description for your client secret.\n 4. Select an expiration for the secret or specify a custom lifetime. Limit is 24 months.\n 5. Select **Add**.\n 6. *Record the secret's value for use in your client application code. This secret value is never displayed again after you leave this page.*\n\n> **Reference link:** [https://learn.microsoft.com/azure/active-directory/develop/quickstart-register-app#add-a-client-secret](https://learn.microsoft.com/azure/active-directory/develop/quickstart-register-app#add-a-client-secret)"
+            "title": "Sentinel Configuration",
+            "description": "**Step 3: Get Sentinel Resources**\n\n1. In the Azure portal, go to your **Log Analytics workspace**\n2. Note the **Workspace name** and **Resource group**\n3. Go to **Access control (IAM)** and note your **Azure Entra Object ID** (User ID)\n4. These will be used during function deployment"
         },
         {
-            "title": "",
-            "description": "**STEP 4 - Get Object ID of your application in Microsoft Entra ID**\n\n After creating your app registration, follow the steps in this section to get Object ID:\n 1. Go to **Microsoft Entra ID**.\n 2. Select **Enterprise applications** from the left menu.\n 3. Find your newly created application in the list (you can search by the name you provided).\n 4. Click on the application.\n 5. On the overview page, copy the **Object ID**. This is the **AzureEntraObjectID** needed for your ARM template role assignment."
+            "title": "Deploy Function App",
+            "description": "**Step 4: Deploy Azure Function App**\n\n1. Click the **Deploy to Azure** button below\n2. Fill in the deployment parameters:\n   - **FunctionName**: Prefix for your function app (1-11 chars)\n   - **Location**: Region for deployment\n   - **WorkspaceName**: Your Log Analytics workspace name\n   - **ChronicleProjectId**: Your Google SecOps project ID\n   - **ChronicleRegion**: Your Google SecOps region (default: `us`)\n   - **ChronicleInstanceId**: Your Google SecOps instance ID\n   - **ChronicleServiceAccountJson**: Paste the full service account JSON key\n   - **AzureClientId**: App registration client ID\n   - **AzureClientSecret**: App registration client secret\n   - **AzureEntraObjectID**: Your Azure Entra user/app object ID\n   - **TenantId**: Your Azure Entra tenant ID\n   - **LookbackDays**: Days to look back on first run (1-7, default: 1)\n   - **DetectionBatchSize**: Detections per API request (default: 1000)\n   - **MaxDetections**: Max detections per API response (default: 100)\n   - **Schedule**: Timer trigger CRON expression (default: `0 */10 * * * *` = every 10 minutes)\n3. Click **Review + Create** and then **Create**"
         },
         {
-            "title": "",
-            "description": "**STEP 5 - Assign role of Contributor to application in Microsoft Entra ID**\n\n Follow the steps in this section to assign the role:\n 1. In the Azure portal, Go to **Resource Group** and select your resource group.\n 2. Go to **Access control (IAM)** from left panel.\n 3. Click on **Add**, and then select **Add role assignment**.\n 4. Select **Contributor** as role and click on next.\n 5. In **Assign access to**, select `User, group, or service principal`.\n 6. Click on **add members** and type **your app name** that you have created and select it.\n 7. Now click on **Review + assign** and then again click on **Review + assign**.\n\n> **Reference link:** [https://learn.microsoft.com/azure/role-based-access-control/role-assignments-portal](https://learn.microsoft.com/azure/role-based-access-control/role-assignments-portal)"
-        },
-        {
-            "title": "",
-            "description": "**STEP 6 - Choose ONE from the following two deployment options to deploy the connector and the associated Azure Function**\n\n>**IMPORTANT:** Before deploying the Google SecOps data connector, have the Google Cloud Service Account JSON key and Entra ID application credentials readily available."
-        },
-        {
-            "title": "Option 1 - Azure Resource Manager (ARM) Template",
-            "description": "Use this method for automated deployment of the Google SecOps Detection Alerts connector.\n\n1. Click the **Deploy to Azure** button below.\n\n\t[![Deploy To Azure](https://aka.ms/deploytoazurebutton)](https://aka.ms/sentinel-GSDetectionAlerts-azuredeploy) [![Deploy to Azure Gov](https://aka.ms/deploytoazuregovbutton)](https://aka.ms/sentinel-GSDetectionAlerts-azuredeploy-gov)\n2. Select the preferred **Subscription**, **Resource Group** and **Location**.\n3. Enter the below information:\n\t\tFunction Name\n\t\tWorkspace Name\n\t\tChronicle Project Id\n\t\tChronicle Region\n\t\tChronicle Instance Id\n\t\tChronicle Service Account Json\n\t\tInput Start Time\n\t\tSchedule\n\t\tAzure Client Id\n\t\tAzure Client Secret\n\t\tAzure Entra Object ID\n\t\tTenant Id\n\t\tApp Insights Workspace Resource ID\n4. Mark the checkbox labeled **I agree to the terms and conditions stated above**.\n5. Click **Purchase** to deploy."
-        },
-        {
-            "title": "Option 2 - Manual Deployment of Azure Functions",
-            "description": "Use the following step-by-step instructions to deploy the Google SecOps data connector manually with Azure Functions (Deployment via Visual Studio Code)."
-        },
-        {
-            "title": "",
-            "description": "**1. Deploy a Function App**\n\n> **NOTE:** You will need to [prepare VS code](https://docs.microsoft.com/azure/azure-functions/functions-create-first-function-python#prerequisites) for Azure function development.\n\n1. Download the [Azure Function App](https://aka.ms/sentinel-GSDetectionAlerts-functionapp) file. Extract archive to your local development computer.\n2. Start VS Code. Choose File in the main menu and select Open Folder.\n3. Select the top level folder from extracted files.\n4. Choose the Azure icon in the Activity bar, then in the **Azure: Functions** area, choose the **Deploy to function app** button.\nIf you aren't already signed in, choose the Azure icon in the Activity bar, then in the **Azure: Functions** area, choose **Sign in to Azure**.\nIf you're already signed in, go to the next step.\n5. Provide the following information at the prompts:\n\n\ta. **Select folder:** Choose a folder from your workspace or browse to one that contains your function app.\n\n\tb. **Select Subscription:** Choose the subscription to use.\n\n\tc. Select **Create new Function App in Azure** (Don't choose the Advanced option)\n\n\td. **Enter a globally unique name for the function app:** Type a name that is valid in a URL path. The name you type is validated to make sure that it's unique in Azure Functions. (e.g., GSDetectionAlertsXXXXX).\n\n\te. **Select a runtime:** Choose Python 3.12.\n\n\tf. Select a location for new resources. For better performance and lower costs choose the same [region](https://azure.microsoft.com/regions/) where Microsoft Sentinel is located.\n\n6. Deployment will begin. A notification is displayed after your function app is created and the deployment package is applied.\n7. Go to Azure Portal for the Function App configuration."
-        },
-        {
-            "title": "",
-            "description": "**2. Configure the Function App**\n\n1. In the Function App, select the Function App Name and select **Configuration**.\n2. In the **Application settings** tab, select **+ New application setting**.\n3. Add each of the following application settings individually, with their respective values (case-sensitive):\n\t\tChronicleProjectId\n\t\tChronicleRegion\n\t\tChronicleInstanceId\n\t\tChronicleServiceAccountJson\n\t\tInputStartTime\n\t\tSchedule\n\t\tAZURE_CLIENT_ID\n\t\tAZURE_CLIENT_SECRET\n\t\tAZURE_TENANT_ID\n\t\tAZURE_DATA_COLLECTION_ENDPOINT\n\t\tDCR_RULE_ID\n\t\tDcrStreamName\n\t\tSCOPE\n\t\tLogLevel\n4. Once all application settings have been entered, click **Save**."
+            "title": "Verify Ingestion",
+            "description": "**Step 5: Verify Data Ingestion**\n\n1. After deployment completes (5-10 minutes), go to your Log Analytics workspace\n2. Run this query to verify data is arriving:\n   ```kusto\n   GCSDetectionAlerts_CL\n   | where TimeGenerated > ago(1h)\n   | summarize Count=count()\n   ```\n3. Check the Azure Function App **Monitor** tab to verify function executions\n4. If no data appears, check:\n   - Function app logs for errors\n   - Service account permissions in Google Cloud\n   - App registration permissions in Azure"
         }
     ]
 }

@@ -1,4 +1,9 @@
-"""Fetch Google SecOps detection alerts and save each response to a file immediately."""
+"""Fetch detection alerts from Google SecOps (Chronicle) and save to Azure File Share.
+
+Polls the Chronicle API for detection alerts and saves each response batch
+to Azure File Share for durable buffering. The companion AzureStorageToSentinel
+function monitors and ingests the files into Microsoft Sentinel.
+"""
 
 import inspect
 import json
@@ -13,9 +18,10 @@ from ..SharedCode.state_manager import StateManager
 
 
 class GoogleSecOpsToStorage:
-    """Fetch batches from Chronicle API and save each response immediately."""
+    """Fetch detection batches from Chronicle and save to Azure File Share."""
 
     def __init__(self) -> None:
+        """Initialize Chronicle client, checkpoint manager, and validate configuration."""
         self._validate_env_vars()
         self._auth = GoogleServiceAccountAuth()
         self._client = ChronicleClient(self._auth)
@@ -27,7 +33,12 @@ class GoogleSecOpsToStorage:
         self._start_time = int(time.time())
 
     def _validate_env_vars(self) -> None:
-        required = [
+        """Verify all required environment variables are configured.
+
+        Raises:
+            ValueError: If any required environment variables are missing
+        """
+        required_vars = [
             ("AzureWebJobsStorage", consts.CONN_STRING),
             ("ChronicleProjectId", consts.CHRONICLE_PROJECT_ID),
             ("ChronicleRegion", consts.CHRONICLE_REGION),
@@ -37,16 +48,17 @@ class GoogleSecOpsToStorage:
             ("DCR_RULE_ID", consts.DCR_IMMUTABLE_ID),
             ("DcrStreamName", consts.DCR_STREAM_NAME),
         ]
-        missing = [name for name, val in required if not val]
+        missing = [name for name, val in required_vars if not val]
         if missing:
-            raise ValueError(f"Missing env vars: {missing}")
+            raise ValueError(f"Missing required environment variables: {missing}")
 
     def run(self) -> None:
-        """Fetch and save each API response immediately."""
+        """Fetch detection batches from Chronicle API and save to Azure File Share."""
         method = inspect.currentframe().f_code.co_name
         page_start, page_token = self._checkpoint.resolve_initial_start_time()
+
         applogger.info(
-            "%s (%s): starting (start=%s token=%s timeout=%ds)",
+            "%s (%s): starting (checkpoint: start=%s token=%s, timeout=%ds)",
             consts.LOG_PREFIX,
             method,
             page_start,
@@ -56,6 +68,8 @@ class GoogleSecOpsToStorage:
 
         deadline = time.time() + consts.FUNCTION_APP_TIMEOUT_SECONDS
         batch_count = 0
+        total_detections = 0
+
         applogger.debug(
             "%s: deadline set to %s (%.0f seconds from now)",
             consts.LOG_PREFIX,
@@ -64,43 +78,37 @@ class GoogleSecOpsToStorage:
         )
 
         try:
-            applogger.debug("%s: starting API polling loop", consts.LOG_PREFIX)
+            applogger.debug("%s: beginning API polling loop", consts.LOG_PREFIX)
             for batch, next_token, next_start in self._client.poll_detection_batches(
                 page_start_time=page_start,
                 page_token=page_token,
                 deadline_epoch=deadline,
             ):
-                # Step 1: Save full API response to file immediately
                 batch_count += 1
-                applogger.debug(
-                    "%s: received batch #%d, saving to file",
-                    consts.LOG_PREFIX,
-                    batch_count,
-                )
-                self._write_response_to_file(batch, batch_count)
 
-                # Step 2: Update checkpoint after save
-                applogger.debug(
-                    "%s: updating checkpoint after batch #%d",
-                    consts.LOG_PREFIX,
-                    batch_count,
-                )
+                # Save batch to file and track detection count
+                batch_detection_count = self._write_response_to_file(batch, batch_count)
+                total_detections += batch_detection_count
+
+                # Update checkpoint after successful save
                 self._update_checkpoint(page_start, next_token, next_start)
 
-                # Check time budget
+                # Check if time budget is exhausted
                 remaining = deadline - time.time()
+                if remaining <= 0:
+                    applogger.warning(
+                        "%s: time budget exhausted after batch #%d, stopping",
+                        consts.LOG_PREFIX,
+                        batch_count,
+                    )
+                    break
+
                 applogger.debug(
-                    "%s: batch #%d complete, %.0f seconds remaining",
+                    "%s: batch #%d complete (%.0f seconds remaining)",
                     consts.LOG_PREFIX,
                     batch_count,
                     remaining,
                 )
-                if remaining <= 0:
-                    applogger.warning(
-                        "%s: time budget exhausted, stopping",
-                        consts.LOG_PREFIX,
-                    )
-                    break
 
             applogger.info(
                 "%s: polling loop completed normally",
@@ -109,7 +117,7 @@ class GoogleSecOpsToStorage:
 
         except ChronicleConnectorError as exc:
             applogger.exception(
-                "%s: API error after %d batches: %s",
+                "%s: Chronicle API error after %d batches: %s",
                 consts.LOG_PREFIX,
                 batch_count,
                 exc,
@@ -122,43 +130,55 @@ class GoogleSecOpsToStorage:
                 exc,
             )
 
-        runtime = time.time() - (self._start_time)
+        runtime = time.time() - self._start_time
         applogger.info(
-            "%s (%s): complete (responses saved=%d, runtime=%.1f seconds)",
+            "%s (%s): complete (batches=%d, detections fetched and saved=%d, runtime=%.1fs)",
             consts.LOG_PREFIX,
             method,
             batch_count,
+            total_detections,
             runtime,
         )
 
-    def _write_response_to_file(self, response: dict, index: int) -> None:
-        """Write full API response to file immediately.
+    def _write_response_to_file(self, response: dict, index: int) -> int:
+        """Save full API response to Azure File Share.
+
+        Writes the complete response as a JSON file and tracks detection count.
 
         Args:
-            response: Complete API response dict (unmodified)
-            index: Response number in this invocation
+            response: Complete API response dict
+            index: Batch number in this invocation
+
+        Returns:
+            Number of detections in this batch
         """
         current_epoch = int(time.time())
         filename = f"{consts.FILE_NAME_PREFIX}_{current_epoch}_{index}"
-        content = json.dumps(response, indent=2)
-        size_kb = len(content.encode("utf-8")) / 1024
 
-        # Log the full response being saved
+        # Extract detection count
+        detections = response.get("detections", []) if isinstance(response, dict) else []
+        detection_count = len(detections) if isinstance(detections, list) else 0
+
+        # Log response summary
         applogger.info(
-            "%s: API response #%d: keys=%s",
+            "%s: API response #%d has %d detections (keys=%s)",
             consts.LOG_PREFIX,
             index,
-            list(response.keys()) if isinstance(response, dict) else "array",
+            detection_count,
+            list(response.keys()) if isinstance(response, dict) else "N/A",
         )
         applogger.debug(
-            "%s: full response: %s",
+            "%s: response #%d content: %s",
             consts.LOG_PREFIX,
+            index,
             json.dumps(response),
         )
 
-        # TODO: REMOVE - File write time tracking
+        # Write to file share
+        content = json.dumps(response, indent=2)
+        size_kb = len(content.encode("utf-8")) / 1024
+
         write_start = time.time()
-        # Write to file immediately
         sm = StateManager(
             connection_string=consts.CONN_STRING,
             file_path=filename,
@@ -167,45 +187,50 @@ class GoogleSecOpsToStorage:
         sm.post(content)
         write_elapsed = time.time() - write_start
 
-        # TODO: REMOVE - Log file write time
         applogger.info(
-            "%s: response saved → file=%s size=%.2f KB write_time=%.2fs",
+            "%s: response #%d saved (file=%s, detections=%d, size=%.1f KB, time=%.2fs)",
             consts.LOG_PREFIX,
+            index,
             filename,
+            detection_count,
             size_kb,
             write_elapsed,
         )
+
+        return detection_count
 
     def _update_checkpoint(
         self, page_start: str, next_token: str, next_start: str
     ) -> None:
         """Update checkpoint after successful file write.
 
+        Handles two scenarios:
+        1. Window complete: Save new start time and clear token
+        2. Mid-window: Save pagination token and keep start time
+
         Args:
             page_start: Current window start time
             next_token: Pagination token from response (if any)
             next_start: Next window start time (if any)
         """
-        # TODO: REMOVE - Checkpoint update time tracking
         checkpoint_start = time.time()
+
         if next_start:
-            # Window complete: save new start time, clear token
+            # Window complete: advance to next time window
             self._checkpoint.set_checkpoint(next_start, None)
-            checkpoint_elapsed = time.time() - checkpoint_start
-            # TODO: REMOVE - Log checkpoint update time
+            elapsed = time.time() - checkpoint_start
             applogger.info(
-                "%s: window complete, checkpoint advanced to %s (update_time=%.2fs)",
+                "%s: window complete, checkpoint advanced to %s (update=%.2fs)",
                 consts.LOG_PREFIX,
                 next_start,
-                checkpoint_elapsed,
+                elapsed,
             )
         elif next_token:
-            # Mid-window: save token, keep current start time
+            # Mid-window: pagination needed
             self._checkpoint.set_checkpoint(page_start, next_token)
-            checkpoint_elapsed = time.time() - checkpoint_start
-            # TODO: REMOVE - Log checkpoint update time
-            applogger.info(
-                "%s: mid-window, checkpoint saved with token (update_time=%.2fs)",
+            elapsed = time.time() - checkpoint_start
+            applogger.debug(
+                "%s: mid-window checkpoint saved with token (update=%.2fs)",
                 consts.LOG_PREFIX,
-                checkpoint_elapsed,
+                elapsed,
             )

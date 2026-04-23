@@ -1,18 +1,16 @@
 """Timer-trigger entry point for the GoogleSecOpsToStorage function.
 
-Fetches detection alerts from the Google SecOps (Chronicle) streaming API
-and writes them page-by-page into Azure File Share for durable buffering.
+Fetches detection alerts from the Google SecOps (Chronicle) API and saves
+raw detection batches to Azure File Share for durable buffering.
 
-The companion AzureStorageToSentinel function then reads those files and
-ingests the records into the Azure Log Analytics Workspace table.
+The companion AzureStorageToSentinel function monitors the file share and
+ingests the records into Microsoft Sentinel.
 
-Trigger schedule: controlled by the *FetcherSchedule* app setting
-(CRON expression, e.g. "0 */5 * * * *" for every 5 minutes).
+Trigger schedule: controlled by the Schedule CRON expression
+(e.g. "0 */10 * * * *" for every 10 minutes).
 """
 
 import datetime
-import logging
-import time
 
 import azure.functions as func
 
@@ -22,6 +20,7 @@ from .google_secops_to_storage import GoogleSecOpsToStorage
 
 
 def main(mytimer: func.TimerRequest) -> None:
+    """Fetch detection alerts from Chronicle and save to Azure File Share."""
     start = datetime.datetime.now(datetime.timezone.utc)
 
     applogger.info(
@@ -32,7 +31,7 @@ def main(mytimer: func.TimerRequest) -> None:
     )
 
     if mytimer.past_due:
-        logging.info("%s: timer is past due", consts.LOG_PREFIX)
+        applogger.warning("%s: timer is past due", consts.LOG_PREFIX)
 
     try:
         runner = GoogleSecOpsToStorage()

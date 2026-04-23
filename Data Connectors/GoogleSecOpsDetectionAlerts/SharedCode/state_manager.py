@@ -1,4 +1,21 @@
-"""Azure File Share checkpoint and data file manager."""
+"""Manage checkpoint state and data files in Azure File Share.
+
+This module handles:
+1. Checkpoint persistence: tracks API pagination state between runs
+2. Data file I/O: stores raw detection batches from Chronicle
+3. Time window management: computes lookback windows for fetching
+
+Checkpoint Format:
+  {
+    "pageStartTime": "2026-04-23T00:00:00Z",  # Window start (for new window)
+    "pageToken": "token123"                    # Pagination token (for mid-window)
+  }
+
+Time Windows:
+- If pageToken exists: continue mid-window (resume pagination)
+- If pageStartTime exists: start new window from that time
+- If neither: compute new start time from LookbackDays
+"""
 
 import json
 from datetime import datetime, timedelta, timezone
@@ -11,8 +28,21 @@ from . import consts
 from .logger import applogger
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Buffer time added when computing lookback window (prevents data loss on boundaries)
+LOOKBACK_BUFFER_MINUTES = 5
+
+
 class StateManager:
-    """Read/write checkpoint and data files from Azure File Share."""
+    """Manage checkpoint and data file persistence in Azure File Share.
+
+    Two use cases:
+    1. Checkpoint tracking: save pagination state between function invocations
+    2. Raw data storage: buffer detection batches from Chronicle before ingestion
+    """
 
     def __init__(
         self,
@@ -20,112 +50,234 @@ class StateManager:
         file_path: str = consts.CHECKPOINT_FILE_NAME,
         share_name: str = consts.FILE_SHARE_NAME,
     ):
+        """Initialize file share clients.
+
+        Args:
+            connection_string: Azure Storage connection string
+            file_path: File to read/write (checkpoint or data file)
+            share_name: File share name (checkpoint or data share)
+
+        Raises:
+            ValueError: If connection string is empty
+        """
         if not connection_string:
-            raise ValueError("AzureWebJobsStorage connection string required")
-        self._file_cli = ShareFileClient.from_connection_string(
-            conn_str=connection_string, share_name=share_name, file_path=file_path
+            raise ValueError(
+                "Azure Storage connection string required (AzureWebJobsStorage)"
+            )
+
+        self._file_client = ShareFileClient.from_connection_string(
+            conn_str=connection_string,
+            share_name=share_name,
+            file_path=file_path,
         )
-        self._share_cli = ShareClient.from_connection_string(
-            conn_str=connection_string, share_name=share_name
+        self._share_client = ShareClient.from_connection_string(
+            conn_str=connection_string,
+            share_name=share_name,
         )
 
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # FILE I/O: Read/Write/Delete
+    # ═══════════════════════════════════════════════════════════════════════════════
+
     def get(self) -> Optional[str]:
-        """Read file contents."""
+        """Read file contents as text.
+
+        Returns:
+            File contents, or None if file not found
+        """
         try:
-            return self._file_cli.download_file().readall().decode()
+            return self._file_client.download_file().readall().decode()
         except ResourceNotFoundError:
             return None
 
     def post(self, text: str) -> None:
-        """Write file contents, creating share if needed."""
+        """Write text to file (creates share if needed).
+
+        Creates the file share on first write (idempotent).
+
+        Args:
+            text: Content to write
+        """
         try:
-            self._file_cli.upload_file(text)
+            self._file_client.upload_file(text)
         except ResourceNotFoundError:
+            # Share doesn't exist: create it, then upload
             try:
-                self._share_cli.create_share()
+                self._share_client.create_share()
             except ResourceExistsError:
+                # Race condition: share was created by another process
                 pass
-            self._file_cli.upload_file(text)
+            self._file_client.upload_file(text)
 
     def delete(self) -> None:
-        """Delete file (ignores if not found)."""
+        """Delete file (safe if file doesn't exist)."""
         try:
-            self._file_cli.delete_file()
+            self._file_client.delete_file()
         except ResourceNotFoundError:
             pass
 
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # CHECKPOINT MANAGEMENT
+    # ═══════════════════════════════════════════════════════════════════════════════
+
     def get_checkpoint(self) -> Optional[dict]:
-        """Load checkpoint dict from file."""
-        raw = self.get()
-        if not raw:
+        """Load checkpoint from file.
+
+        Checkpoint tracks API pagination state:
+        - pageStartTime: current time window start
+        - pageToken: pagination token (if mid-window)
+
+        Returns:
+            Checkpoint dict, or None if not found or corrupt
+        """
+        raw_content = self.get()
+        if not raw_content:
             return None
+
         try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            applogger.warning("%s: corrupt checkpoint, discarding", consts.LOG_PREFIX)
+            return json.loads(raw_content)
+        except json.JSONDecodeError as err:
+            applogger.warning(
+                "%s: checkpoint corrupt (invalid JSON), discarding: %s",
+                consts.LOG_PREFIX,
+                err,
+            )
             return None
 
     def set_checkpoint(
-        self, page_start_time: str, page_token: Optional[str] = None
+        self,
+        page_start_time: str,
+        page_token: Optional[str] = None,
     ) -> None:
-        """Save checkpoint to file."""
-        data = {"pageStartTime": page_start_time, "pageToken": page_token}
-        self.post(json.dumps(data))
-        applogger.info(
-            "%s: checkpoint saved (token=%s)",
+        """Save checkpoint to file.
+
+        Args:
+            page_start_time: Current time window start (ISO format)
+            page_token: Pagination token if mid-window, None if starting new window
+        """
+        checkpoint_data = {
+            "pageStartTime": page_start_time,
+            "pageToken": page_token,
+        }
+        self.post(json.dumps(checkpoint_data))
+        applogger.debug(
+            "%s: checkpoint saved (start=%s, token=%s)",
             consts.LOG_PREFIX,
+            page_start_time[:10],  # Just show date
             "yes" if page_token else "no",
         )
 
     def resolve_initial_start_time(self) -> Tuple[str, Optional[str]]:
-        """Get start time and token for next API call.
+        """Determine where to start fetching detections.
 
-        Logic:
-        1. Load checkpoint if exists and valid
-        2. Reset if older than 7 days
-        3. Fall back to InputStartTime or LookbackDays
+        Decision Tree:
+        1. If checkpoint exists:
+           - If stale (>7 days old): reset to MAX_LOOKBACK_DAYS
+           - Otherwise: resume from checkpoint (with pagination token if any)
+        2. If no checkpoint: compute from LookbackDays config
+
+        Returns:
+            Tuple of (start_time, pagination_token) where:
+              - start_time: ISO timestamp to start fetching from
+              - pagination_token: None (new window) or token (resume mid-window)
         """
-        cp = self.get_checkpoint()
-        if cp:
-            page_start = cp.get("pageStartTime", "")
-            page_token = cp.get("pageToken")
+        checkpoint = self.get_checkpoint()
+
+        if checkpoint:
+            page_start = checkpoint.get("pageStartTime", "")
+            page_token = checkpoint.get("pageToken")
+
+            # Check if checkpoint is still valid
             if page_start or page_token:
                 if self._is_stale(page_start):
+                    # Checkpoint too old: reset to safe lookback
                     new_start = self._compute_start_time(consts.MAX_LOOKBACK_DAYS)
                     applogger.warning(
-                        "%s: checkpoint stale, resetting to %s",
+                        "%s: checkpoint stale (>%d days), resetting to %s",
                         consts.LOG_PREFIX,
-                        new_start,
+                        consts.MAX_LOOKBACK_DAYS,
+                        new_start[:10],
                     )
                     return new_start, None
-                applogger.info("%s: loaded checkpoint", consts.LOG_PREFIX)
+
+                applogger.info(
+                    "%s: resuming from checkpoint (date=%s, token=%s)",
+                    consts.LOG_PREFIX,
+                    page_start[:10],
+                    "yes" if page_token else "no",
+                )
                 return page_start, page_token
 
-        # No checkpoint: use provided start time or compute from lookback
-        lookback = min(consts.LOOKBACK_DAYS, consts.MAX_LOOKBACK_DAYS)
+        # No checkpoint: compute start time from configuration
+        lookback_days = min(consts.LOOKBACK_DAYS, consts.MAX_LOOKBACK_DAYS)
+        start_time = self._compute_start_time(lookback_days)
 
-        start_time = self._compute_start_time(lookback)
         applogger.info(
-            "%s: computed start from LookbackDays=%d", consts.LOG_PREFIX, lookback
+            "%s: no checkpoint, computed start (lookback=%d days): %s",
+            consts.LOG_PREFIX,
+            lookback_days,
+            start_time[:10],
         )
         return start_time, None
 
-    def _is_stale(self, iso_time: str) -> bool:
-        """Check if time is older than MAX_LOOKBACK_DAYS."""
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # INTERNAL: Time Window Utilities
+    # ═══════════════════════════════════════════════════════════════════════════════
+
+    def _is_stale(self, iso_timestamp: str) -> bool:
+        """Check if timestamp is older than MAX_LOOKBACK_DAYS.
+
+        Args:
+            iso_timestamp: ISO 8601 timestamp (e.g., "2026-04-23T07:30:00Z")
+
+        Returns:
+            True if timestamp is older than MAX_LOOKBACK_DAYS, False otherwise
+        """
         try:
-            dt = datetime.fromisoformat(iso_time.replace("Z", "+00:00"))
-            cutoff = datetime.now(timezone.utc) - timedelta(
+            # Parse ISO timestamp, handling both Z and +00:00 suffix
+            parsed_time = datetime.fromisoformat(
+                iso_timestamp.replace("Z", "+00:00")
+            )
+
+            # Compute cutoff: now - MAX_LOOKBACK_DAYS
+            cutoff_time = datetime.now(timezone.utc) - timedelta(
                 days=consts.MAX_LOOKBACK_DAYS
             )
-            return dt < cutoff
-        except (ValueError, AttributeError):
+
+            # Stale if timestamp is before cutoff
+            return parsed_time < cutoff_time
+        except (ValueError, AttributeError) as err:
+            applogger.debug(
+                "%s: could not parse timestamp %s: %s",
+                consts.LOG_PREFIX,
+                iso_timestamp,
+                err,
+            )
             return False
 
     def _compute_start_time(self, days_ago: int) -> str:
-        """Compute ISO timestamp for N days ago with 5-minute buffer.
+        """Compute ISO timestamp for N days ago with buffer.
 
-        Example: if current time is 2026-04-23T07:38:03Z and days_ago=7,
-        returns 2026-04-16T07:43:03Z (7 days ago + 5 min buffer)
+        Adds a buffer to prevent missing data at time window boundaries.
+        Useful when Chronicle's time windows align with exact seconds.
+
+        Formula: now - days_ago - LOOKBACK_BUFFER_MINUTES
+
+        Args:
+            days_ago: How many days back to fetch from
+
+        Returns:
+            ISO 8601 timestamp (UTC, Z suffix)
+
+        Example:
+            If current time is 2026-04-23T07:38:03Z and days_ago=7:
+            Returns: 2026-04-16T07:33:03Z (7 days ago minus 5 min buffer)
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days_ago, minutes=-5)
-        return cutoff.isoformat().replace("+00:00", "Z")
+        # Subtract days and buffer minutes from now
+        target_time = datetime.now(timezone.utc) - timedelta(
+            days=days_ago,
+            minutes=LOOKBACK_BUFFER_MINUTES,
+        )
+
+        # Format as ISO timestamp with Z suffix (not +00:00)
+        return target_time.isoformat().replace("+00:00", "Z")

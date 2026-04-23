@@ -1,70 +1,126 @@
-"""Constants and configurations for the Google SecOps Detection Alerts connector."""
+"""Configuration constants for Google SecOps Detection Alerts connector.
+
+This module defines all environment variables, defaults, and tuning parameters
+for the two-function pipeline that fetches detections from Google Chronicle
+and ingests them into Microsoft Sentinel.
+
+Pipeline Overview:
+  1. GoogleSecOpsToStorage: Polls Chronicle API → saves to Azure File Share
+  2. AzureStorageToSentinel: Monitors share → posts to Sentinel via DCR API
+"""
 
 import os
 from .utils import parse_cron_timeout
 
-# ── Logging ───────────────────────────────────────────────────────────────────
-LOG_LEVEL = os.environ.get("LogLevel", "INFO")
-LOGS_STARTS_WITH = "GoogleSecOpsDetectionAlerts"
-LOG_PREFIX = LOGS_STARTS_WITH
-FUNCTION_NAME_FETCHER = "GoogleSecOpsToStorage"
-FUNCTION_NAME_INGESTER = "AzureStorageToSentinel"
-LOG_FORMAT = "{}(method = {}) : {} : {}"
 
-# ── Azure Monitor Ingestion (DCR-based) ──────────────────────────────────────
-DCE_ENDPOINT = os.environ.get(
-    "AZURE_DATA_COLLECTION_ENDPOINT", ""
-)  # set by ARM template
-DCR_IMMUTABLE_ID = os.environ.get("DCR_RULE_ID", "")  # set by ARM template
-DCR_STREAM_NAME = os.environ.get("DcrStreamName", "")  # set by ARM template
+# ═══════════════════════════════════════════════════════════════════════════════
+# APPLICATION METADATA
+# ═══════════════════════════════════════════════════════════════════════════════
+# Used for logging and identification across both functions
 
-# ── Chronicle API ─────────────────────────────────────────────────────────────
+LOG_PREFIX = "GoogleSecOpsDetectionAlerts"  # Prefix for all log messages
+LOG_LEVEL = os.environ.get("LogLevel", "INFO")  # DEBUG, INFO, WARNING, ERROR
+
+FUNCTION_NAME_FETCHER = "GoogleSecOpsToStorage"  # First function (Chronicle → Storage)
+FUNCTION_NAME_INGESTER = "AzureStorageToSentinel"  # Second function (Storage → Sentinel)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHRONICLE API CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+# Required: Set via ARM template or environment variables
+# These connect to your Google SecOps (Chronicle) instance
+
 CHRONICLE_PROJECT_ID = os.environ.get("ChronicleProjectId", "")
-CHRONICLE_REGION = os.environ.get("ChronicleRegion", "us")
+CHRONICLE_REGION = os.environ.get("ChronicleRegion", "us")  # us, europe, asia-southeast1
 CHRONICLE_INSTANCE_ID = os.environ.get("ChronicleInstanceId", "")
 SERVICE_ACCOUNT_JSON = os.environ.get("ChronicleServiceAccountJson", "")
 
-# ── Chronicle pagination parameters ───────────────────────────────────────────
-DETECTION_BATCH_SIZE = int(os.environ.get("DetectionBatchSize", "1000"))
-MAX_DETECTIONS = int(os.environ.get("MaxDetections", "100"))
-LOOKBACK_DAYS = int(os.environ.get("LookbackDays", "1"))
-MAX_LOOKBACK_DAYS = 7
+# Google OAuth configuration for Chronicle API authentication
+OAUTH_SCOPE = os.environ.get("OAuthScope", "https://www.googleapis.com/auth/cloud-platform")
+TOKEN_EXPIRY_BUFFER_SECONDS = 60  # Refresh token 60s before expiry
 
-# ── Checkpoint / state (Azure File Share) ─────────────────────────────────────
-# AzureWebJobsStorage is the standard connection string env-var for Azure Functions.
-CONN_STRING = os.environ.get("AzureWebJobsStorage", "")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AZURE STORAGE CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+# File shares for checkpoint tracking and raw data storage
+
+CONN_STRING = os.environ.get("AzureWebJobsStorage", "")  # Storage account connection string
+
+# State management (checkpoint tracking)
 FILE_SHARE_NAME = os.environ.get("FileShareName", "google-secops-state")
-FILE_SHARE_NAME_DATA = os.environ.get("FileShareNameData", "google-secops-data")
 CHECKPOINT_FILE_NAME = os.environ.get("CheckpointFileName", "google_secops_checkpoint")
 
-# ── Google OAuth ──────────────────────────────────────────────────────────────
-OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
-OAUTH_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
-TOKEN_EXPIRY_BUFFER_SECONDS = 60
+# Raw detection data (buffering between functions)
+FILE_SHARE_NAME_DATA = os.environ.get("FileShareNameData", "google-secops-data")
+FILE_NAME_PREFIX = "google_secops_raw"  # Files named: {PREFIX}_{epoch}_{index}
 
-# ── Retry / timeout ───────────────────────────────────────────────────────────
-# Chronicle server sends a heartbeat every ~15 s; 300 s read timeout is safe.
-API_TIMEOUT_SECONDS = 300
-RETRY_BASE_DELAY_SECONDS = 2
-# After this many consecutive stream failures the fetcher gives up for this run.
-MAX_CONSECUTIVE_FAILURES = 7
-RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-# Function app timeout computed from Schedule CRON expression (e.g., "0 */10 * * * *" → 570 seconds)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AZURE MONITOR INGESTION (SENTINEL DCR)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Data Collection Rule (DCR) endpoint for posting detections to Sentinel
+# Required: Set via ARM template
+
+DCE_ENDPOINT = os.environ.get("AZURE_DATA_COLLECTION_ENDPOINT", "")
+DCR_IMMUTABLE_ID = os.environ.get("DCR_RULE_ID", "")
+DCR_STREAM_NAME = os.environ.get("DcrStreamName", "")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DETECTION FETCHING PARAMETERS
+# ═══════════════════════════════════════════════════════════════════════════════
+# Control how many detections are fetched from Chronicle in each operation
+
+LOOKBACK_DAYS = int(os.environ.get("LookbackDays", "1"))  # Default: 1 day back
+MAX_LOOKBACK_DAYS = 7  # Safety limit: never go back more than 7 days
+
+DETECTION_BATCH_SIZE = int(os.environ.get("DetectionBatchSize", "1000"))
+# How many detections per Chronicle API page (Chronicle's pagination)
+
+MAX_DETECTIONS = int(os.environ.get("MaxDetections", "1000"))
+# How many detections to fetch before stopping (per run)
+# Prevents runaway fetches; use smaller values in testing
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DATA PIPELINE SETTINGS
+# ═══════════════════════════════════════════════════════════════════════════════
+# Control file handling and batching through the pipeline
+
+# Ingestion: Post to Sentinel in chunks (500 events per API call)
+INGESTION_BATCH_SIZE = 500
+
+# File age before ingester picks it up (seconds)
+# Prevents race condition: gives fetcher time to finish writing before ingester reads
+MAX_FILE_AGE_FOR_INGESTION = 300  # 5 minutes
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# POLLING & MONITORING SETTINGS
+# ═══════════════════════════════════════════════════════════════════════════════
+# How often the ingester checks for new files
+
+FILE_CHECK_INTERVAL_SECONDS = 300  # 5 minutes: check for new files
+BUSY_WAIT_SLEEP_SECONDS = 10  # Sleep between checks (avoids CPU spinning)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RESILIENCE & TIMEOUT SETTINGS
+# ═══════════════════════════════════════════════════════════════════════════════
+# Error handling and timeouts for API calls
+
+# Chronicle API streaming timeout
+API_TIMEOUT_SECONDS = 300  # 5 minutes
+# Chronicle server sends heartbeat every ~15 seconds
+# 300s timeout is safe for detecting truly dead connections
+
+# Retry behavior for transient errors
+RETRY_BASE_DELAY_SECONDS = 2  # Initial backoff delay: 2 seconds
+MAX_CONSECUTIVE_FAILURES = 7  # Give up after 7 consecutive errors
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}  # HTTP codes to retry on
+
+# Function timeout calculated from Azure schedule (CRON expression)
+# Example: "0 */10 * * * *" (every 10 min) → 570 seconds
 FUNCTION_APP_TIMEOUT_SECONDS = int(parse_cron_timeout())
-
-# ── Data file settings ────────────────────────────────────────────────────────
-# Raw detection files are named:  google_secops_raw_<epoch>_<file_index>
-# The epoch is the start_time of the function invocation (not the detection time).
-FILE_NAME_PREFIX = "google_secops_raw"
-# Minimum age (seconds) a data file must have before the ingester picks it up,
-# giving the fetcher time to finish writing the file.
-MAX_FILE_AGE_FOR_INGESTION = 300
-# Maximum byte size of a single Azure File Share data file before rolling over.
-# Detections are accumulated until this limit is hit, then flushed to a new file.
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
-
-# ── Error messages ─────────────────────────────────────────────────────────────
-UNEXPECTED_ERROR_MSG = "Unexpected error : Error-{}"
-HTTP_ERROR_MSG = "HTTP error : Error-{}"
-REQUEST_ERROR_MSG = "Request error : Error-{}"
-CONNECTION_ERROR_MSG = "Connection error : Error-{}"

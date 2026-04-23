@@ -1,16 +1,15 @@
 """Timer-trigger entry point for the AzureStorageToSentinel function.
 
-Reads raw detection JSON files written by GoogleSecOpsToStorage from
-Azure File Share, transforms each record, and ingests them into the
-Azure Log Analytics Workspace table via the Data Collector API.
+Monitors Azure File Share for raw detection files saved by GoogleSecOpsToStorage
+and ingests them into Microsoft Sentinel via the Logs Ingestion API (DCR).
 
-Trigger schedule: controlled by the *IngesterSchedule* app setting
-(CRON expression, e.g. "0 */5 * * * *" for every 5 minutes).
+Checks every 5 minutes for new eligible files and posts detections in batches.
+
+Trigger schedule: controlled by the Schedule CRON expression
+(e.g. "0 */10 * * * *" for every 10 minutes).
 """
 
 import datetime
-import logging
-import time
 
 import azure.functions as func
 
@@ -20,6 +19,7 @@ from .azure_storage_to_sentinel import AzureStorageToSentinel
 
 
 def main(mytimer: func.TimerRequest) -> None:
+    """Ingest detection files from Azure File Share into Microsoft Sentinel."""
     start = datetime.datetime.now(datetime.timezone.utc)
 
     applogger.info(
@@ -30,7 +30,7 @@ def main(mytimer: func.TimerRequest) -> None:
     )
 
     if mytimer.past_due:
-        logging.info("%s: timer is past due", consts.LOG_PREFIX)
+        applogger.warning("%s: timer is past due", consts.LOG_PREFIX)
 
     try:
         runner = AzureStorageToSentinel()

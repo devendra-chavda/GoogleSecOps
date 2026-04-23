@@ -53,11 +53,7 @@ def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
         raise SentinelIngestionError(f"Invalid JSON body: {err}") from err
 
     if not records:
-        applogger.debug(
-            "{}(method={}) : empty batch, skip".format(
-                consts.LOGS_STARTS_WITH, __method_name
-            )
-        )
+        applogger.debug(f"{consts.LOGS_STARTS_WITH}({__method_name}): empty batch, skip")
         return
 
     try:
@@ -65,21 +61,15 @@ def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
         client = LogsIngestionClient(endpoint=endpoint, credential=credential)
         client.upload(rule_id=rule_id, stream_name=stream, logs=records)
         applogger.info(
-            "{}(method={}) : uploaded {} records → stream={}".format(
-                consts.LOGS_STARTS_WITH, __method_name, len(records), stream
-            )
+            f"{consts.LOGS_STARTS_WITH}({__method_name}): uploaded {len(records)} records → stream={stream}"
         )
     except HttpResponseError as err:
         applogger.error(
-            "{}(method={}) : HTTP error: {}".format(
-                consts.LOGS_STARTS_WITH, __method_name, err
-            )
+            f"{consts.LOGS_STARTS_WITH}({__method_name}): HTTP error: {err}"
         )
         raise SentinelIngestionError(f"HTTP error: {err}") from err
     except Exception as err:
         applogger.error(
-            "{}(method={}) : unexpected error: {}".format(
-                consts.LOGS_STARTS_WITH, __method_name, err
-            )
+            f"{consts.LOGS_STARTS_WITH}({__method_name}): unexpected error: {err}"
         )
         raise SentinelIngestionError(f"Unexpected error: {err}") from err
