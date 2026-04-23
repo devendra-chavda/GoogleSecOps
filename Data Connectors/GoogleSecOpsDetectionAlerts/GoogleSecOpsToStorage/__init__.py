@@ -23,7 +23,6 @@ from .google_secops_to_storage import GoogleSecOpsToStorage
 
 def main(mytimer: func.TimerRequest) -> None:
     start = datetime.datetime.now(datetime.timezone.utc)
-    start_epoch = str(int(time.time()))
 
     applogger.info(
         "%s: %s started at %s",
@@ -36,7 +35,7 @@ def main(mytimer: func.TimerRequest) -> None:
         logging.info("%s: timer is past due", consts.LOG_PREFIX)
 
     try:
-        runner = GoogleSecOpsToStorage(start_epoch)
+        runner = GoogleSecOpsToStorage()
         runner.run()
     except Exception:
         applogger.exception(

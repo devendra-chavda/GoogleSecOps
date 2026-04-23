@@ -21,7 +21,6 @@ from .azure_storage_to_sentinel import AzureStorageToSentinel
 
 def main(mytimer: func.TimerRequest) -> None:
     start = datetime.datetime.now(datetime.timezone.utc)
-    start_epoch = str(int(time.time()))
 
     applogger.info(
         "%s: %s started at %s",
@@ -34,7 +33,7 @@ def main(mytimer: func.TimerRequest) -> None:
         logging.info("%s: timer is past due", consts.LOG_PREFIX)
 
     try:
-        runner = AzureStorageToSentinel(start_epoch)
+        runner = AzureStorageToSentinel()
         runner.run()
     except Exception:
         applogger.exception(

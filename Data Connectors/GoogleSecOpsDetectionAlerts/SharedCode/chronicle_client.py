@@ -123,15 +123,21 @@ class ChronicleClient:
         )
 
         try:
-            applogger.info("%s: opening HTTP connection with streaming", consts.LOG_PREFIX)
+            applogger.info(
+                "%s: opening HTTP connection with streaming", consts.LOG_PREFIX
+            )
             # TODO: REMOVE - Response wait time tracking
             request_start = time.time()
 
             # Use streaming=True to avoid buffering entire response
             with httpx.Client(timeout=timeout) as client:
-                applogger.info("%s: sending POST request (stream=True)", consts.LOG_PREFIX)
+                applogger.info(
+                    "%s: sending POST request (stream=True)", consts.LOG_PREFIX
+                )
 
-                with client.stream("POST", self._endpoint, headers=headers, json=body) as response:
+                with client.stream(
+                    "POST", self._endpoint, headers=headers, json=body
+                ) as response:
                     request_elapsed = time.time() - request_start
                     # TODO: REMOVE - Log API response wait time
                     applogger.info(
@@ -144,6 +150,32 @@ class ChronicleClient:
                     if response.status_code == 401:
                         applogger.error("%s: Unauthorized (401)", consts.LOG_PREFIX)
                         raise ChronicleApiError("Unauthorized (401)", status_code=401)
+                    if response.status_code == 400:
+                        # Read error details from response body
+                        try:
+                            error_body = response.text
+                            applogger.error(
+                                "%s: Bad Request (400): %s",
+                                consts.LOG_PREFIX,
+                                error_body[:500],
+                            )
+                        except Exception:
+                            applogger.error(
+                                "%s: Bad Request (400): could not read response body",
+                                consts.LOG_PREFIX,
+                            )
+                        applogger.error(
+                            "%s: Request body was: batchSize=%d, maxDetections=%d, pageToken=%s, pageStartTime=%s",
+                            consts.LOG_PREFIX,
+                            consts.DETECTION_BATCH_SIZE,
+                            consts.MAX_DETECTIONS,
+                            "yes" if page_token else "no",
+                            page_start[:50] if page_start else "none",
+                        )
+                        raise ChronicleApiError(
+                            f"Bad Request (400) - check API parameters",
+                            status_code=400,
+                        )
                     if response.status_code >= 400:
                         applogger.error(
                             "%s: HTTP error %d", consts.LOG_PREFIX, response.status_code
@@ -160,7 +192,9 @@ class ChronicleClient:
                         consts.API_TIMEOUT_SECONDS,
                     )
 
-                    batch = self._read_stream_batch(response, consts.API_TIMEOUT_SECONDS)
+                    batch = self._read_stream_batch(
+                        response, consts.API_TIMEOUT_SECONDS
+                    )
                     return batch
 
         except httpx.RequestError as exc:
@@ -174,7 +208,9 @@ class ChronicleClient:
             )
             raise ChronicleApiError(f"Error: {exc}") from exc
 
-    def _read_stream_batch(self, response: "httpx.Response", timeout_seconds: int) -> dict:
+    def _read_stream_batch(
+        self, response: "httpx.Response", timeout_seconds: int
+    ) -> dict:
         """Read and parse first complete JSON batch from never-ending streaming array.
 
         Chronicle sends a never-closing JSON array: [{batch1}, {batch2}, ...]
@@ -268,11 +304,17 @@ class ChronicleClient:
                                         "%s: batch received (%.2f MB), keys=%s",
                                         consts.LOG_PREFIX,
                                         total_bytes / (1024 * 1024),
-                                        list(batch.keys()) if isinstance(batch, dict) else "array",
+                                        (
+                                            list(batch.keys())
+                                            if isinstance(batch, dict)
+                                            else "array"
+                                        ),
                                     )
 
                                     # Check for heartbeat
-                                    if isinstance(batch, dict) and batch.get("heartbeat"):
+                                    if isinstance(batch, dict) and batch.get(
+                                        "heartbeat"
+                                    ):
                                         applogger.debug(
                                             "%s: received heartbeat",
                                             consts.LOG_PREFIX,
@@ -314,10 +356,7 @@ class ChronicleClient:
 
     def _sleep_with_backoff(self, attempt: int) -> None:
         """Sleep with exponential backoff."""
-        delay = (
-            consts.RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
-            + random.uniform(0, 1.0)
-        )
+        delay = consts.RETRY_BASE_DELAY_SECONDS * (2**attempt) + random.uniform(0, 1.0)
         applogger.warning(
             "%s: retry %d/%d, sleeping %.1f s",
             consts.LOG_PREFIX,

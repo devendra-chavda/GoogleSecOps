@@ -18,8 +18,7 @@ _BATCH_SIZE = 500
 class AzureStorageToSentinel:
     """Process response files and post detections to Sentinel."""
 
-    def __init__(self, start_epoch: str) -> None:
-        self._start_epoch = int(start_epoch)
+    def __init__(self) -> None:
         self._data_dir = ShareDirectoryClient.from_connection_string(
             conn_str=consts.CONN_STRING,
             share_name=consts.FILE_SHARE_NAME_DATA,
@@ -27,31 +26,57 @@ class AzureStorageToSentinel:
         )
 
     def run(self) -> None:
-        """Process each response file and post detections."""
+        """Process response files with retry every 5 minutes for new files."""
         method = inspect.currentframe().f_code.co_name
-        file_names = self._list_eligible_files()
-
-        if not file_names:
-            applogger.info("%s (%s): no files found", consts.LOG_PREFIX, method)
-            return
+        deadline = time.time() + consts.FUNCTION_APP_TIMEOUT_SECONDS
+        total_posted = 0
+        check_interval = 300  # 5 minutes
+        last_check = time.time()
 
         applogger.info(
-            "%s (%s): processing %d response files",
+            "%s (%s): starting with timeout=%ds, checking every %ds",
             consts.LOG_PREFIX,
             method,
-            len(file_names),
+            consts.FUNCTION_APP_TIMEOUT_SECONDS,
+            check_interval,
         )
 
-        total_posted = 0
-        for filename in file_names:
-            try:
-                posted = self._process_response_file(filename)
-                total_posted += posted
-            except Exception:
-                applogger.exception("%s: error processing %s", consts.LOG_PREFIX, filename)
+        while time.time() < deadline:
+            # Check for files if interval has passed or first iteration
+            if time.time() - last_check >= check_interval or last_check == time.time():
+                file_names = self._list_eligible_files()
+                last_check = time.time()
+
+                if file_names:
+                    applogger.info(
+                        "%s (%s): processing %d response files",
+                        consts.LOG_PREFIX,
+                        method,
+                        len(file_names),
+                    )
+
+                    for filename in file_names:
+                        try:
+                            posted = self._process_response_file(filename)
+                            total_posted += posted
+                        except Exception:
+                            applogger.exception(
+                                "%s: error processing %s", consts.LOG_PREFIX, filename
+                            )
+                else:
+                    remaining = deadline - time.time()
+                    applogger.info(
+                        "%s: no files found, will check again in %ds (%.0f seconds remaining)",
+                        consts.LOG_PREFIX,
+                        check_interval,
+                        remaining,
+                    )
+
+            # Sleep briefly to avoid busy loop
+            time.sleep(10)
 
         applogger.info(
-            "%s (%s): complete (events posted=%d)",
+            "%s (%s): complete (total events posted=%d)",
             consts.LOG_PREFIX,
             method,
             total_posted,
@@ -104,9 +129,7 @@ class AzureStorageToSentinel:
 
         Process: Read → Extract detections → Post → Delete
         """
-        applogger.info(
-            "%s: processing response file: %s", consts.LOG_PREFIX, filename
-        )
+        applogger.info("%s: processing response file: %s", consts.LOG_PREFIX, filename)
 
         sm = StateManager(
             connection_string=consts.CONN_STRING,

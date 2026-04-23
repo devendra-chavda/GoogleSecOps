@@ -114,12 +114,18 @@ class StateManager:
         """Check if time is older than MAX_LOOKBACK_DAYS."""
         try:
             dt = datetime.fromisoformat(iso_time.replace("Z", "+00:00"))
-            cutoff = datetime.now(timezone.utc) - timedelta(days=consts.MAX_LOOKBACK_DAYS)
+            cutoff = datetime.now(timezone.utc) - timedelta(
+                days=consts.MAX_LOOKBACK_DAYS
+            )
             return dt < cutoff
         except (ValueError, AttributeError):
             return False
 
     def _compute_start_time(self, days_ago: int) -> str:
-        """Compute ISO timestamp for N days ago."""
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days_ago)
+        """Compute ISO timestamp for N days ago with 5-minute buffer.
+
+        Example: if current time is 2026-04-23T07:38:03Z and days_ago=7,
+        returns 2026-04-16T07:43:03Z (7 days ago + 5 min buffer)
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days_ago, minutes=-5)
         return cutoff.isoformat().replace("+00:00", "Z")

@@ -15,8 +15,7 @@ from ..SharedCode.state_manager import StateManager
 class GoogleSecOpsToStorage:
     """Fetch batches from Chronicle API and save each response immediately."""
 
-    def __init__(self, start_epoch: str) -> None:
-        self._start_epoch = start_epoch
+    def __init__(self) -> None:
         self._validate_env_vars()
         self._auth = GoogleServiceAccountAuth()
         self._client = ChronicleClient(self._auth)
@@ -137,7 +136,8 @@ class GoogleSecOpsToStorage:
             response: Complete API response dict (unmodified)
             index: Response number in this invocation
         """
-        filename = f"{consts.FILE_NAME_PREFIX}_{self._start_epoch}_{index}"
+        current_epoch = int(time.time())
+        filename = f"{consts.FILE_NAME_PREFIX}_{current_epoch}_{index}"
         content = json.dumps(response, indent=2)
         size_kb = len(content.encode("utf-8")) / 1024
 

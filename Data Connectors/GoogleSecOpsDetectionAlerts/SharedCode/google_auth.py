@@ -27,7 +27,9 @@ class GoogleServiceAccountAuth:
         try:
             sa_dict = json.loads(service_account_json)
         except json.JSONDecodeError as exc:
-            raise ChronicleAuthError("ChronicleServiceAccountJson invalid JSON") from exc
+            raise ChronicleAuthError(
+                "ChronicleServiceAccountJson invalid JSON"
+            ) from exc
 
         missing = [k for k in ("client_email", "private_key") if not sa_dict.get(k)]
         if missing:
@@ -62,4 +64,7 @@ class GoogleServiceAccountAuth:
             raise ChronicleAuthError(f"Token refresh failed: {exc}") from exc
 
     def _is_token_valid(self, now: float) -> bool:
-        return self._token and now < self._token_expiry - consts.TOKEN_EXPIRY_BUFFER_SECONDS
+        return (
+            self._token
+            and now < self._token_expiry - consts.TOKEN_EXPIRY_BUFFER_SECONDS
+        )

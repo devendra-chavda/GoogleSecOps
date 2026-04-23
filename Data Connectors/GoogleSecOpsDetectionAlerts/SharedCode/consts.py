@@ -48,7 +48,7 @@ RETRY_BASE_DELAY_SECONDS = 2
 # After this many consecutive stream failures the fetcher gives up for this run.
 MAX_CONSECUTIVE_FAILURES = 7
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-FUNCTION_APP_TIMEOUT_SECONDS = 570
+FUNCTION_APP_TIMEOUT_SECONDS = os.environ.get("Schedule", "0 */10 * * * *")
 
 # ── Data file settings ────────────────────────────────────────────────────────
 # Raw detection files are named:  google_secops_raw_<epoch>_<file_index>
