@@ -91,11 +91,18 @@
         "description": "Number of days to look back for initial data pull. Range: 1-7 days. Calculation: current UTC time - N days. Example: if current time is 2026-04-15T00:01:23Z and LookbackDays=1, start time will be 2026-04-14T00:01:23Z. Subsequent runs use the persisted checkpoint."
       }
     },
-    "Schedule": {
+    "FatchSchedule": {
       "type": "string",
       "defaultValue": "0 */10 * * * *",
       "metadata": {
-        "description": "Timer-trigger CRON expression (default: every 10 minutes)."
+        "description": "Timer-trigger CRON expression for GoogleSecOpsToStorage function (default: every 10 minutes). Fetches detection alerts from SecOps API."
+      }
+    },
+    "IngestSchedule": {
+      "type": "string",
+      "defaultValue": "0 2/10 * * * *",
+      "metadata": {
+        "description": "Timer-trigger CRON expression for AzureStorageToSentinel function (default: every 5 minutes). Ingests detections from File Share into Sentinel."
       }
     },
     "AzureClientId": {
@@ -528,7 +535,8 @@
             "APPINSIGHTS_INSTRUMENTATIONKEY": "[reference(resourceId('Microsoft.insights/components', variables('FunctionName')), '2015-05-01').InstrumentationKey]",
             "APPLICATIONINSIGHTS_CONNECTION_STRING": "[reference(resourceId('microsoft.insights/components', variables('FunctionName')), '2015-05-01').ConnectionString]",
             "AzureWebJobsStorage": "[concat('DefaultEndpointsProtocol=https;AccountName=', toLower(variables('FunctionName')),';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', toLower(variables('FunctionName'))), '2019-06-01').keys[0].value, ';EndpointSuffix=',toLower(variables('StorageSuffix')))]",
-            "Schedule": "[parameters('Schedule')]",
+            "FatchSchedule": "[parameters('FatchSchedule')]",
+            "IngestSchedule": "[parameters('IngestSchedule')]",
             "SecOpsProjectId": "[parameters('SecOpsProjectId')]",
             "SecOpsRegion": "[parameters('SecOpsRegion')]",
             "SecOpsInstanceId": "[parameters('SecOpsInstanceId')]",
