@@ -22,83 +22,115 @@ class AzureStorageToSentinel:
 
     def __init__(self) -> None:
         """Initialize Azure File Share client."""
-        self._data_dir = ShareDirectoryClient.from_connection_string(
-            conn_str=consts.CONN_STRING,
-            share_name=consts.FILE_SHARE_NAME_DATA,
-            directory_path="",
-        )
+        __method_name = inspect.currentframe().f_code.co_name
+
+        try:
+            self._data_dir = ShareDirectoryClient.from_connection_string(
+                conn_str=consts.CONN_STRING,
+                share_name=consts.FILE_SHARE_NAME_DATA,
+                directory_path="",
+            )
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_INGESTER,
+                    f"Initialized Azure File Share client for share={consts.FILE_SHARE_NAME_DATA}"
+                )
+            )
+        except Exception as exc:
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_INGESTER,
+                f"Failed to initialize Azure File Share client: {exc}"
+            )
+            applogger.error(error_msg)
+            raise
 
     def run(self) -> None:
         """Process response files from Azure File Share and post to Sentinel."""
-        method = inspect.currentframe().f_code.co_name
+        __method_name = inspect.currentframe().f_code.co_name
         deadline = time.time() + consts.FUNCTION_APP_TIMEOUT_SECONDS
+
+        applogger.info(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_INGESTER,
+                f"Sentinel ingestion started: timeout={consts.FUNCTION_APP_TIMEOUT_SECONDS}s, batch_size={consts.INGESTION_BATCH_SIZE}, check_interval={consts.FILE_CHECK_INTERVAL_SECONDS}s"
+            )
+        )
 
         # Counters for tracking pipeline flow
         total_extracted = 0
         total_posted = 0
         files_processed = 0
         last_check_time = time.time()
+        start_time = time.time()
 
-        applogger.info(
-            "%s (%s): starting (timeout=%ds, check interval=%ds)",
-            consts.LOG_PREFIX,
-            method,
-            consts.FUNCTION_APP_TIMEOUT_SECONDS,
-            consts.FILE_CHECK_INTERVAL_SECONDS,
-        )
+        try:
+            while time.time() < deadline:
+                # Check for files at configured interval
+                time_since_last_check = time.time() - last_check_time
+                should_check_files = (
+                    time_since_last_check >= consts.FILE_CHECK_INTERVAL_SECONDS
+                    or last_check_time == start_time  # First iteration
+                )
 
-        while time.time() < deadline:
-            # Check for files at configured interval
-            time_since_last_check = time.time() - last_check_time
-            should_check_files = (
-                time_since_last_check >= consts.FILE_CHECK_INTERVAL_SECONDS
-                or last_check_time == time.time()  # First iteration
-            )
+                if should_check_files:
+                    file_names = self._list_eligible_files()
+                    last_check_time = time.time()
 
-            if should_check_files:
-                file_names = self._list_eligible_files()
-                last_check_time = time.time()
-
-                if file_names:
-                    for filename in file_names:
-                        try:
+                    if file_names:
+                        applogger.debug(
+                            consts.LOG_FORMAT.format(
+                                consts.LOG_PREFIX,
+                                __method_name,
+                                consts.FUNCTION_NAME_INGESTER,
+                                f"Found {len(file_names)} eligible files for ingestion"
+                            )
+                        )
+                        for filename in file_names:
                             extracted, posted = self._process_response_file(filename)
                             total_extracted += extracted
                             total_posted += posted
                             files_processed += 1
-                            applogger.info(
-                                "%s: progress (files=%d, extracted=%d, posted=%d)",
+                    else:
+                        remaining = deadline - time.time()
+                        applogger.debug(
+                            consts.LOG_FORMAT.format(
                                 consts.LOG_PREFIX,
-                                files_processed,
-                                total_extracted,
-                                total_posted,
+                                __method_name,
+                                consts.FUNCTION_NAME_INGESTER,
+                                f"No eligible files found, waiting {remaining:.0f}s"
                             )
-                        except Exception:
-                            applogger.exception(
-                                "%s: error processing file %s",
-                                consts.LOG_PREFIX,
-                                filename,
-                            )
-                else:
-                    remaining = deadline - time.time()
-                    applogger.debug(
-                        "%s: no files ready, will recheck in %ds (%.0f seconds remaining)",
-                        consts.LOG_PREFIX,
-                        consts.FILE_CHECK_INTERVAL_SECONDS,
-                        remaining,
-                    )
+                        )
 
-            # Brief sleep to avoid busy spinning
-            time.sleep(consts.BUSY_WAIT_SLEEP_SECONDS)
+                # Brief sleep to avoid busy spinning
+                time.sleep(consts.BUSY_WAIT_SLEEP_SECONDS)
 
+        except Exception as exc:
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_INGESTER,
+                f"Error during ingestion loop: {exc}"
+            )
+            applogger.error(error_msg)
+            raise
+
+        runtime = time.time() - start_time
+        success_rate = (total_posted / total_extracted * 100) if total_extracted > 0 else 0
         applogger.info(
-            "%s (%s): complete (files processed=%d, extracted=%d, posted=%d)",
-            consts.LOG_PREFIX,
-            method,
-            files_processed,
-            total_extracted,
-            total_posted,
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_INGESTER,
+                f"Ingestion complete: files_processed={files_processed}, total_extracted={total_extracted}, total_posted={total_posted}, success_rate={success_rate:.1f}%, runtime={runtime:.1f}s"
+            )
         )
+
 
     def _list_eligible_files(self) -> list:
         """List response files ready for ingestion (aged files only).
@@ -108,20 +140,53 @@ class AzureStorageToSentinel:
 
         Returns:
             List of filenames sorted by creation time (oldest first).
+
+        Raises:
+            Exception: On critical file share access errors
         """
+        __method_name = inspect.currentframe().f_code.co_name
         try:
             entries = list(
                 self._data_dir.list_directories_and_files(consts.FILE_NAME_PREFIX)
             )
             all_files = [e["name"] for e in entries if not e.get("is_directory")]
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_INGESTER,
+                    f"Listed {len(all_files)} files in data share"
+                )
+            )
         except ResourceNotFoundError:
-            applogger.debug("%s: data share not initialized yet", consts.LOG_PREFIX)
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_INGESTER,
+                    "Data share not found, no files available (this is normal on first run)"
+                )
+            )
             return []
-        except Exception:
-            applogger.exception("%s: error listing files in share", consts.LOG_PREFIX)
-            return []
+        except Exception as exc:
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_INGESTER,
+                f"Critical error listing files from data share: {exc}"
+            )
+            applogger.error(error_msg)
+            raise
 
         if not all_files:
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_INGESTER,
+                    "No files found in data share"
+                )
+            )
             return []
 
         # Filter: only include files older than MAX_FILE_AGE_FOR_INGESTION
@@ -134,12 +199,13 @@ class AzureStorageToSentinel:
         eligible_files.sort(key=self._get_epoch)
 
         if eligible_files:
-            applogger.info(
-                "%s: found %d files (total), %d eligible (aged >%ds)",
-                consts.LOG_PREFIX,
-                len(all_files),
-                len(eligible_files),
-                consts.MAX_FILE_AGE_FOR_INGESTION,
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_INGESTER,
+                    f"Found {len(eligible_files)} eligible files (aged > {consts.MAX_FILE_AGE_FOR_INGESTION}s)"
+                )
             )
 
         return eligible_files
@@ -161,7 +227,21 @@ class AzureStorageToSentinel:
 
         Returns:
             Tuple of (detections_extracted, detections_posted)
+
+        Raises:
+            Exception: On critical failures (invalid JSON, Sentinel post failure)
         """
+        __method_name = inspect.currentframe().f_code.co_name
+
+        applogger.debug(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_INGESTER,
+                f"Processing file: {filename}"
+            )
+        )
+
         sm = StateManager(
             connection_string=consts.CONN_STRING,
             file_path=filename,
@@ -171,49 +251,86 @@ class AzureStorageToSentinel:
         # Read and validate file
         raw_content = sm.get()
         if not raw_content:
-            applogger.warning("%s: empty file, skipping: %s", consts.LOG_PREFIX, filename)
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_INGESTER,
+                    f"File empty: {filename} (0 bytes), skipping"
+                )
+            )
             sm.delete()
             return 0, 0
+
+        content_size_kb = len(raw_content.encode('utf-8')) / 1024
+        applogger.debug(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_INGESTER,
+                f"File read: {filename}, size={content_size_kb:.1f}KB"
+            )
+        )
 
         # Parse JSON response
         try:
             response = json.loads(raw_content)
-        except json.JSONDecodeError as err:
-            applogger.error(
-                "%s: invalid JSON in %s: %s",
-                consts.LOG_PREFIX,
-                filename,
-                err,
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_INGESTER,
+                    f"JSON parsed: {filename}, structure={type(response).__name__}, keys={list(response.keys()) if isinstance(response, dict) else 'N/A'}"
+                )
             )
-            return 0, 0
-
-        applogger.debug(
-            "%s: parsed response from %s (keys=%s)",
-            consts.LOG_PREFIX,
-            filename,
-            list(response.keys()) if isinstance(response, dict) else "N/A",
-        )
+        except json.JSONDecodeError as err:
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_INGESTER,
+                f"CRITICAL: Invalid JSON in {filename}: char={err.pos}, line={err.lineno}, reason={err.msg}"
+            )
+            applogger.error(error_msg)
+            sm.delete()
+            raise Exception(error_msg)
 
         # Extract detections
         detections = self._extract_detections(response)
         if not detections:
-            applogger.info("%s: no detections found in %s", consts.LOG_PREFIX, filename)
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_INGESTER,
+                    f"No detections: {filename} (response structure had no detections array), skipping"
+                )
+            )
             sm.delete()
             return 0, 0
 
         extracted_count = len(detections)
         applogger.info(
-            "%s: extracted %d detections from %s",
-            consts.LOG_PREFIX,
-            extracted_count,
-            filename,
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_INGESTER,
+                f"Extracted: {extracted_count} detections from {filename} ({content_size_kb:.1f}KB file)"
+            )
         )
 
-        # Post to Sentinel
+        # Post to Sentinel (will raise exception on failure)
         posted_count = self._post_to_sentinel(detections, filename)
 
         # Cleanup
         sm.delete()
+        applogger.debug(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_INGESTER,
+                f"Deleted file {filename}"
+            )
+        )
 
         return extracted_count, posted_count
 
@@ -240,16 +357,21 @@ class AzureStorageToSentinel:
 
         Returns:
             Number of events successfully posted
+
+        Raises:
+            Exception: If any batch fails to post
         """
+        __method_name = inspect.currentframe().f_code.co_name
         total_count = len(detections)
         batch_count = (total_count + consts.INGESTION_BATCH_SIZE - 1) // consts.INGESTION_BATCH_SIZE
 
-        applogger.info(
-            "%s: posting %d events (%d batches × %d)",
-            consts.LOG_PREFIX,
-            total_count,
-            batch_count,
-            consts.INGESTION_BATCH_SIZE,
+        applogger.debug(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_INGESTER,
+                f"Posting: total={total_count}, batches={batch_count}, batch_size={consts.INGESTION_BATCH_SIZE}, source={filename}"
+            )
         )
 
         posted_count = 0
@@ -260,25 +382,36 @@ class AzureStorageToSentinel:
             batch = detections[start_idx:end_idx]
             batch_size = len(batch)
 
-            # Post batch to Sentinel
-            post_data(json.dumps(batch), consts.DCR_STREAM_NAME)
-            posted_count += batch_size
+            try:
+                # Post batch to Sentinel
+                post_data(json.dumps(batch), consts.DCR_STREAM_NAME)
+                posted_count += batch_size
 
-            applogger.info(
-                "%s: batch %d/%d posted (events %d-%d, %d events)",
-                consts.LOG_PREFIX,
-                batch_num,
-                batch_count,
-                start_idx + 1,
-                end_idx,
-                batch_size,
-            )
+                applogger.info(
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        __method_name,
+                        consts.FUNCTION_NAME_INGESTER,
+                        f"Batch {batch_num}/{batch_count} posted: size={batch_size}, cumulative={posted_count}/{total_count}"
+                    )
+                )
+            except Exception as exc:
+                error_msg = consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_INGESTER,
+                    f"CRITICAL - Batch {batch_num}/{batch_count} failed: batch_size={batch_size}, posted_so_far={posted_count}/{total_count}, error_type={type(exc).__name__}, reason={str(exc)[:150]}"
+                )
+                applogger.error(error_msg)
+                raise
 
         applogger.info(
-            "%s: completed posting from %s (all %d batches)",
-            consts.LOG_PREFIX,
-            filename,
-            batch_count,
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_INGESTER,
+                f"All batches posted successfully: total={posted_count}/{total_count}, batches={batch_count}, stream={consts.DCR_STREAM_NAME}"
+            )
         )
 
         return posted_count

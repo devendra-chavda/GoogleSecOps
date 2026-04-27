@@ -15,6 +15,7 @@ import json
 import random
 import time
 from typing import Iterator, Optional, Tuple
+import inspect
 
 import httpx
 
@@ -66,14 +67,29 @@ class ChronicleClient:
         Raises:
             ValueError: If any required configuration is missing
         """
+        __method_name = inspect.currentframe().f_code.co_name
+
         if not all([project_id, region, instance_id]):
-            raise ValueError(
-                f"Missing Chronicle config: project_id={project_id}, "
-                f"region={region}, instance_id={instance_id}"
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "ChronicleClient",
+                f"Missing Chronicle config: project_id={project_id}, region={region}, instance_id={instance_id}"
             )
+            applogger.error(error_msg)
+            raise ValueError(error_msg)
 
         self._auth = auth
         self._endpoint = self._build_endpoint(project_id, region, instance_id)
+
+        applogger.debug(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "ChronicleClient",
+                f"Initialized Chronicle client with endpoint: {self._endpoint[:50]}..."
+            )
+        )
 
     @staticmethod
     def _build_endpoint(project_id: str, region: str, instance_id: str) -> str:
@@ -114,16 +130,31 @@ class ChronicleClient:
         Raises:
             ChronicleConnectorError: If too many consecutive API failures
         """
+        __method_name = inspect.currentframe().f_code.co_name
         current_token = page_token
         current_start = page_start_time
         consecutive_failures = 0
 
+        applogger.debug(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "ChronicleClient",
+                f"Starting detection batch polling from {page_start_time}"
+            )
+        )
+
         while True:
             # Give up after too many failures
             if consecutive_failures > consts.MAX_CONSECUTIVE_FAILURES:
-                raise ChronicleConnectorError(
+                error_msg = consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    "ChronicleClient",
                     f"Too many consecutive API failures: {consecutive_failures}"
                 )
+                applogger.error(error_msg)
+                raise ChronicleConnectorError(error_msg)
 
             # Exponential backoff on retry
             if consecutive_failures > 0:
@@ -142,10 +173,12 @@ class ChronicleClient:
                 # Transient error - retry
                 consecutive_failures += 1
                 applogger.warning(
-                    "%s: API call failed, retrying (attempt %d/%d)",
-                    consts.LOG_PREFIX,
-                    consecutive_failures,
-                    consts.MAX_CONSECUTIVE_FAILURES,
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        __method_name,
+                        "ChronicleClient",
+                        f"API call failed, retrying (attempt {consecutive_failures}/{consts.MAX_CONSECUTIVE_FAILURES}): {str(exc)[:100]}"
+                    )
                 )
                 continue
 
@@ -160,11 +193,25 @@ class ChronicleClient:
 
             # Stop conditions
             if next_start:
-                applogger.info("%s: window complete, moving to next", consts.LOG_PREFIX)
+                applogger.info(
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        __method_name,
+                        "ChronicleClient",
+                        "Window complete, moving to next"
+                    )
+                )
                 return
 
             if deadline_epoch and time.time() >= deadline_epoch:
-                applogger.warning("%s: time budget exhausted", consts.LOG_PREFIX)
+                applogger.warning(
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        __method_name,
+                        "ChronicleClient",
+                        "Time budget exhausted"
+                    )
+                )
                 return
 
             # Update pagination state for next iteration
@@ -195,9 +242,18 @@ class ChronicleClient:
             ChronicleApiError: On HTTP errors or stream read failures
             ChronicleConnectorError: If deadline exceeded
         """
+        __method_name = inspect.currentframe().f_code.co_name
+
         # Check deadline before making request
         if deadline and time.time() >= deadline:
-            raise ChronicleConnectorError("Time budget exhausted before API call")
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "ChronicleClient",
+                "Time budget exhausted before API call"
+            )
+            applogger.error(error_msg)
+            raise ChronicleConnectorError(error_msg)
 
         # Build request body
         request_body = self._build_request_body(page_start, page_token)
@@ -217,11 +273,12 @@ class ChronicleClient:
         )
 
         applogger.debug(
-            "%s: API call (batch=%d, max=%d, timeout=%ds)",
-            consts.LOG_PREFIX,
-            consts.DETECTION_BATCH_SIZE,
-            consts.MAX_DETECTIONS,
-            consts.API_TIMEOUT_SECONDS,
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "ChronicleClient",
+                f"API call (batch={consts.DETECTION_BATCH_SIZE}, max={consts.MAX_DETECTIONS}, timeout={consts.API_TIMEOUT_SECONDS}s)"
+            )
         )
 
         try:
@@ -239,15 +296,23 @@ class ChronicleClient:
                     return batch
 
         except httpx.RequestError as exc:
-            applogger.error("%s: network error: %s", consts.LOG_PREFIX, exc)
-            raise ChronicleApiError(f"Network error: {exc}") from exc
-        except Exception as exc:
-            applogger.error(
-                "%s: unexpected error during API call: %s",
+            error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
-                exc,
+                __method_name,
+                "ChronicleClient",
+                f"Network error: {exc}"
             )
-            raise ChronicleApiError(f"API call failed: {exc}") from exc
+            applogger.error(error_msg)
+            raise ChronicleApiError(error_msg) from exc
+        except Exception as exc:
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "ChronicleClient",
+                f"Unexpected error during API call: {exc}"
+            )
+            applogger.error(error_msg)
+            raise ChronicleApiError(error_msg) from exc
 
     @staticmethod
     def _build_request_body(page_start: str, page_token: Optional[str]) -> dict:
@@ -289,37 +354,42 @@ class ChronicleClient:
         Raises:
             ChronicleApiError: On HTTP error responses
         """
+        __method_name = inspect.currentframe().f_code.co_name
+
         if response.status_code == 401:
-            applogger.error("%s: Unauthorized (401) - check service account", consts.LOG_PREFIX)
-            raise ChronicleApiError("Unauthorized - invalid credentials", status_code=401)
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "ChronicleClient",
+                "Unauthorized (401) - check service account credentials"
+            )
+            applogger.error(error_msg)
+            raise ChronicleApiError(error_msg, status_code=401)
 
         if response.status_code == 400:
-            # Log details to help diagnose bad request errors
             try:
                 error_details = response.text[:500]
-                applogger.error("%s: Bad Request (400): %s", consts.LOG_PREFIX, error_details)
             except Exception:
-                applogger.error("%s: Bad Request (400): could not read body", consts.LOG_PREFIX)
+                error_details = "Could not read error details"
 
-            applogger.error(
-                "%s: request params: batchSize=%d, maxDetections=%d, "
-                "pageToken=%s, pageStartTime=%s",
+            error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
-                consts.DETECTION_BATCH_SIZE,
-                consts.MAX_DETECTIONS,
-                "set" if page_token else "not set",
-                page_start[:30] if page_start else "none",
+                __method_name,
+                "ChronicleClient",
+                f"Bad Request (400): {error_details}. Params: batchSize={consts.DETECTION_BATCH_SIZE}, pageToken={'set' if page_token else 'not set'}"
             )
-            raise ChronicleApiError("Bad Request (400) - check parameters", status_code=400)
+            applogger.error(error_msg)
+            raise ChronicleApiError(error_msg, status_code=400)
 
         if response.status_code >= 400:
-            applogger.error(
-                "%s: HTTP error %d", consts.LOG_PREFIX, response.status_code
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "ChronicleClient",
+                f"HTTP error {response.status_code}"
             )
-            raise ChronicleApiError(
-                f"HTTP {response.status_code}",
-                status_code=response.status_code,
-            )
+            applogger.error(error_msg)
+            raise ChronicleApiError(error_msg, status_code=response.status_code)
 
     # ═══════════════════════════════════════════════════════════════════════════════
     # INTERNAL: STREAM PARSING (Brace-Depth Tracking)
@@ -355,6 +425,7 @@ class ChronicleClient:
         Raises:
             ChronicleApiError: On timeout, JSON parse error, or stream error
         """
+        __method_name = inspect.currentframe().f_code.co_name
         # Parser state
         brace_depth = 0
         current_batch_chars = []
@@ -363,20 +434,29 @@ class ChronicleClient:
         last_line_received = time.time()
         total_bytes_read = 0
 
+        applogger.debug(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "ChronicleClient",
+                "Starting to read streaming batch from Chronicle API"
+            )
+        )
+
         try:
             for line in response.iter_lines():
                 # Check: have we waited too long without data?
                 now = time.time()
                 time_since_last_line = now - last_line_received
                 if time_since_last_line > timeout_seconds and brace_depth > 0:
-                    applogger.error(
-                        "%s: stream timeout (no data for %ds)",
+                    error_msg = consts.LOG_FORMAT.format(
                         consts.LOG_PREFIX,
-                        timeout_seconds,
-                    )
-                    raise ChronicleApiError(
+                        __method_name,
+                        "ChronicleClient",
                         f"Stream timeout: no data for {timeout_seconds}s"
                     )
+                    applogger.error(error_msg)
+                    raise ChronicleApiError(error_msg)
 
                 # Skip empty/whitespace lines
                 if not line or line.isspace():
@@ -388,9 +468,12 @@ class ChronicleClient:
                 # Log progress every 1 MB (helps diagnose hangs)
                 if total_bytes_read > 0 and total_bytes_read % PROGRESS_LOG_THRESHOLD == 0:
                     applogger.info(
-                        "%s: reading stream... %.1f MB",
-                        consts.LOG_PREFIX,
-                        total_bytes_read / (1024 * 1024),
+                        consts.LOG_FORMAT.format(
+                            consts.LOG_PREFIX,
+                            __method_name,
+                            "ChronicleClient",
+                            f"Reading stream... {total_bytes_read / (1024 * 1024):.1f} MB"
+                        )
                     )
 
                 # Process each character to track braces
@@ -440,26 +523,59 @@ class ChronicleClient:
 
                                     # Skip heartbeat messages (keep-alives)
                                     if isinstance(batch, dict) and batch.get("heartbeat"):
+                                        applogger.debug(
+                                            consts.LOG_FORMAT.format(
+                                                consts.LOG_PREFIX,
+                                                __method_name,
+                                                "ChronicleClient",
+                                                "Skipping heartbeat message"
+                                            )
+                                        )
                                         continue
 
                                     # Return first real batch
+                                    applogger.debug(
+                                        consts.LOG_FORMAT.format(
+                                            consts.LOG_PREFIX,
+                                            __method_name,
+                                            "ChronicleClient",
+                                            f"Batch parsed successfully, size: {len(batch_json)} bytes"
+                                        )
+                                    )
                                     return batch
 
                                 except json.JSONDecodeError as err:
                                     applogger.warning(
-                                        "%s: JSON parse error: %s", consts.LOG_PREFIX, err
+                                        consts.LOG_FORMAT.format(
+                                            consts.LOG_PREFIX,
+                                            __method_name,
+                                            "ChronicleClient",
+                                            f"JSON parse error: {err}"
+                                        )
                                     )
                     elif brace_depth > 0:
                         current_batch_chars.append(char)
 
         except httpx.TimeoutException as exc:
-            applogger.error("%s: HTTP read timeout: %s", consts.LOG_PREFIX, exc)
-            raise ChronicleApiError(f"Stream read timeout: {exc}") from exc
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "ChronicleClient",
+                f"HTTP read timeout: {exc}"
+            )
+            applogger.error(error_msg)
+            raise ChronicleApiError(error_msg) from exc
         except ChronicleApiError:
             raise
         except Exception as exc:
-            applogger.error("%s: error reading stream: %s", consts.LOG_PREFIX, exc)
-            raise ChronicleApiError(f"Stream read error: {exc}") from exc
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "ChronicleClient",
+                f"Error reading stream: {exc}"
+            )
+            applogger.error(error_msg)
+            raise ChronicleApiError(error_msg) from exc
 
     # ═══════════════════════════════════════════════════════════════════════════════
     # INTERNAL: RETRY LOGIC
@@ -498,15 +614,17 @@ class ChronicleClient:
         Args:
             attempt: Attempt number (1, 2, 3, ...)
         """
+        __method_name = inspect.currentframe().f_code.co_name
         delay = (
             consts.RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
             + random.uniform(0, 1.0)
         )
         applogger.debug(
-            "%s: backoff %.1fs before retry %d/%d",
-            consts.LOG_PREFIX,
-            delay,
-            attempt,
-            consts.MAX_CONSECUTIVE_FAILURES,
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "ChronicleClient",
+                f"Backoff {delay:.1f}s before retry {attempt}/{consts.MAX_CONSECUTIVE_FAILURES}"
+            )
         )
         time.sleep(delay)

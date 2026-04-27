@@ -20,9 +20,17 @@ from .utils import parse_cron_timeout
 
 LOG_PREFIX = "GoogleSecOpsDetectionAlerts"  # Prefix for all log messages
 LOG_LEVEL = os.environ.get("LogLevel", "INFO")  # DEBUG, INFO, WARNING, ERROR
+LOG_FORMAT = "{}(method = {}) : {} : {}"  # Format: PREFIX(method) : FUNCTION : MESSAGE
 
 FUNCTION_NAME_FETCHER = "GoogleSecOpsToStorage"  # First function (Chronicle → Storage)
 FUNCTION_NAME_INGESTER = "AzureStorageToSentinel"  # Second function (Storage → Sentinel)
+
+# Error messages
+UNEXPECTED_ERROR_MSG = "Unexpected error: {}"
+TIMEOUT_ERROR_MSG = "Timeout reached during Sentinel ingestion. Sent {}/{} records."
+NETWORK_ERROR_MSG = "Network error: {}"
+AUTH_ERROR_MSG = "Authentication error: {}"
+VALIDATION_ERROR_MSG = "Validation error: {}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -66,6 +74,12 @@ FILE_NAME_PREFIX = "google_secops_raw"  # Files named: {PREFIX}_{epoch}_{index}
 DCE_ENDPOINT = os.environ.get("AZURE_DATA_COLLECTION_ENDPOINT", "")
 DCR_IMMUTABLE_ID = os.environ.get("DCR_RULE_ID", "")
 DCR_STREAM_NAME = os.environ.get("DcrStreamName", "")
+
+# Azure Authentication (optional: explicit credentials)
+# If provided, uses ClientSecretCredential; otherwise falls back to DefaultAzureCredential
+AZURE_CLIENT_ID = os.environ.get("AZURE_CLIENT_ID", "")
+AZURE_CLIENT_SECRET = os.environ.get("AZURE_CLIENT_SECRET", "")
+AZURE_TENANT_ID = os.environ.get("AZURE_TENANT_ID", "")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

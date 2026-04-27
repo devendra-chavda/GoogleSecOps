@@ -38,6 +38,7 @@ class GoogleSecOpsToStorage:
         Raises:
             ValueError: If any required environment variables are missing
         """
+        __method_name = inspect.currentframe().f_code.co_name
         required_vars = [
             ("AzureWebJobsStorage", consts.CONN_STRING),
             ("ChronicleProjectId", consts.CHRONICLE_PROJECT_ID),
@@ -50,20 +51,27 @@ class GoogleSecOpsToStorage:
         ]
         missing = [name for name, val in required_vars if not val]
         if missing:
-            raise ValueError(f"Missing required environment variables: {missing}")
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_FETCHER,
+                f"Missing required environment variables: {missing}"
+            )
+            applogger.error(error_msg)
+            raise ValueError(error_msg)
 
     def run(self) -> None:
         """Fetch detection batches from Chronicle API and save to Azure File Share."""
-        method = inspect.currentframe().f_code.co_name
+        __method_name = inspect.currentframe().f_code.co_name
         page_start, page_token = self._checkpoint.resolve_initial_start_time()
 
         applogger.info(
-            "%s (%s): starting (checkpoint: start=%s token=%s, timeout=%ds)",
-            consts.LOG_PREFIX,
-            method,
-            page_start,
-            "yes" if page_token else "no",
-            consts.FUNCTION_APP_TIMEOUT_SECONDS,
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_FETCHER,
+                f"Starting Chronicle polling (checkpoint: start={page_start[:10]}, token={'yes' if page_token else 'no'}, timeout={consts.FUNCTION_APP_TIMEOUT_SECONDS}s)"
+            )
         )
 
         deadline = time.time() + consts.FUNCTION_APP_TIMEOUT_SECONDS
@@ -71,14 +79,23 @@ class GoogleSecOpsToStorage:
         total_detections = 0
 
         applogger.debug(
-            "%s: deadline set to %s (%.0f seconds from now)",
-            consts.LOG_PREFIX,
-            time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(deadline)),
-            deadline - time.time(),
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_FETCHER,
+                f"Deadline set to {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(deadline))} ({deadline - time.time():.0f}s from now)"
+            )
         )
 
         try:
-            applogger.debug("%s: beginning API polling loop", consts.LOG_PREFIX)
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_FETCHER,
+                    "Beginning API polling loop"
+                )
+            )
             for batch, next_token, next_start in self._client.poll_detection_batches(
                 page_start_time=page_start,
                 page_token=page_token,
@@ -97,47 +114,60 @@ class GoogleSecOpsToStorage:
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     applogger.warning(
-                        "%s: time budget exhausted after batch #%d, stopping",
-                        consts.LOG_PREFIX,
-                        batch_count,
+                        consts.LOG_FORMAT.format(
+                            consts.LOG_PREFIX,
+                            __method_name,
+                            consts.FUNCTION_NAME_FETCHER,
+                            f"Time budget exhausted after batch #{batch_count}, stopping"
+                        )
                     )
                     break
 
                 applogger.debug(
-                    "%s: batch #%d complete (%.0f seconds remaining)",
-                    consts.LOG_PREFIX,
-                    batch_count,
-                    remaining,
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        __method_name,
+                        consts.FUNCTION_NAME_FETCHER,
+                        f"Batch #{batch_count} complete ({remaining:.0f}s remaining)"
+                    )
                 )
 
             applogger.info(
-                "%s: polling loop completed normally",
-                consts.LOG_PREFIX,
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_FETCHER,
+                    "Polling loop completed normally"
+                )
             )
 
         except ChronicleConnectorError as exc:
-            applogger.exception(
-                "%s: Chronicle API error after %d batches: %s",
+            error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
-                batch_count,
-                exc,
+                __method_name,
+                consts.FUNCTION_NAME_FETCHER,
+                f"CRITICAL: Chronicle API error after {batch_count} batches: {exc}"
             )
+            applogger.error(error_msg)
+            raise
         except Exception as exc:
-            applogger.exception(
-                "%s: unexpected error after %d batches: %s",
+            error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
-                batch_count,
-                exc,
+                __method_name,
+                consts.FUNCTION_NAME_FETCHER,
+                f"CRITICAL: Unexpected error after {batch_count} batches: {exc}"
             )
+            applogger.error(error_msg)
+            raise
 
         runtime = time.time() - self._start_time
         applogger.info(
-            "%s (%s): complete (batches=%d, detections fetched and saved=%d, runtime=%.1fs)",
-            consts.LOG_PREFIX,
-            method,
-            batch_count,
-            total_detections,
-            runtime,
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_FETCHER,
+                f"Complete (batches={batch_count}, detections={total_detections}, runtime={runtime:.1f}s)"
+            )
         )
 
     def _write_response_to_file(self, response: dict, index: int) -> int:
@@ -152,6 +182,7 @@ class GoogleSecOpsToStorage:
         Returns:
             Number of detections in this batch
         """
+        __method_name = inspect.currentframe().f_code.co_name
         current_epoch = int(time.time())
         filename = f"{consts.FILE_NAME_PREFIX}_{current_epoch}_{index}"
 
@@ -161,17 +192,20 @@ class GoogleSecOpsToStorage:
 
         # Log response summary
         applogger.info(
-            "%s: API response #%d has %d detections (keys=%s)",
-            consts.LOG_PREFIX,
-            index,
-            detection_count,
-            list(response.keys()) if isinstance(response, dict) else "N/A",
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_FETCHER,
+                f"API response #{index} has {detection_count} detections (keys={list(response.keys()) if isinstance(response, dict) else 'N/A'})"
+            )
         )
         applogger.debug(
-            "%s: response #%d content: %s",
-            consts.LOG_PREFIX,
-            index,
-            json.dumps(response),
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_FETCHER,
+                f"Response #{index} structure: type={type(response).__name__}, top_level_keys={list(response.keys()) if isinstance(response, dict) else 'N/A'}"
+            )
         )
 
         # Write to file share
@@ -188,13 +222,12 @@ class GoogleSecOpsToStorage:
         write_elapsed = time.time() - write_start
 
         applogger.info(
-            "%s: response #%d saved (file=%s, detections=%d, size=%.1f KB, time=%.2fs)",
-            consts.LOG_PREFIX,
-            index,
-            filename,
-            detection_count,
-            size_kb,
-            write_elapsed,
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                consts.FUNCTION_NAME_FETCHER,
+                f"Batch #{index} saved: detections={detection_count}, file_size={size_kb:.1f}KB, write_time={write_elapsed:.2f}s, filename={filename}"
+            )
         )
 
         return detection_count
@@ -213,6 +246,7 @@ class GoogleSecOpsToStorage:
             next_token: Pagination token from response (if any)
             next_start: Next window start time (if any)
         """
+        __method_name = inspect.currentframe().f_code.co_name
         checkpoint_start = time.time()
 
         if next_start:
@@ -220,17 +254,22 @@ class GoogleSecOpsToStorage:
             self._checkpoint.set_checkpoint(next_start, None)
             elapsed = time.time() - checkpoint_start
             applogger.info(
-                "%s: window complete, checkpoint advanced to %s (update=%.2fs)",
-                consts.LOG_PREFIX,
-                next_start,
-                elapsed,
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_FETCHER,
+                    f"Window complete, checkpoint advanced to {next_start} (update={elapsed:.2f}s)"
+                )
             )
         elif next_token:
             # Mid-window: pagination needed
             self._checkpoint.set_checkpoint(page_start, next_token)
             elapsed = time.time() - checkpoint_start
             applogger.debug(
-                "%s: mid-window checkpoint saved with token (update=%.2fs)",
-                consts.LOG_PREFIX,
-                elapsed,
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_FETCHER,
+                    f"Mid-window checkpoint saved with pagination token (update={elapsed:.2f}s)"
+                )
             )

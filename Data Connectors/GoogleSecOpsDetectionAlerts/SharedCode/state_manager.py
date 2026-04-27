@@ -20,6 +20,7 @@ Time Windows:
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
+import inspect
 
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.storage.fileshare import ShareClient, ShareFileClient
@@ -60,10 +61,17 @@ class StateManager:
         Raises:
             ValueError: If connection string is empty
         """
+        __method_name = inspect.currentframe().f_code.co_name
+
         if not connection_string:
-            raise ValueError(
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "StateManager",
                 "Azure Storage connection string required (AzureWebJobsStorage)"
             )
+            applogger.error(error_msg)
+            raise ValueError(error_msg)
 
         self._file_client = ShareFileClient.from_connection_string(
             conn_str=connection_string,
@@ -73,6 +81,15 @@ class StateManager:
         self._share_client = ShareClient.from_connection_string(
             conn_str=connection_string,
             share_name=share_name,
+        )
+
+        applogger.debug(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "StateManager",
+                f"Initialized StateManager for share={share_name}, file={file_path}"
+            )
         )
 
     # ═══════════════════════════════════════════════════════════════════════════════
@@ -130,17 +147,38 @@ class StateManager:
         Returns:
             Checkpoint dict, or None if not found or corrupt
         """
+        __method_name = inspect.currentframe().f_code.co_name
         raw_content = self.get()
         if not raw_content:
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    "StateManager",
+                    "No checkpoint file found"
+                )
+            )
             return None
 
         try:
-            return json.loads(raw_content)
+            checkpoint = json.loads(raw_content)
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    "StateManager",
+                    f"Successfully loaded checkpoint: {checkpoint}"
+                )
+            )
+            return checkpoint
         except json.JSONDecodeError as err:
             applogger.warning(
-                "%s: checkpoint corrupt (invalid JSON), discarding: %s",
-                consts.LOG_PREFIX,
-                err,
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    "StateManager",
+                    f"Checkpoint file is corrupt (invalid JSON), discarding: {err}"
+                )
             )
             return None
 
@@ -155,16 +193,19 @@ class StateManager:
             page_start_time: Current time window start (ISO format)
             page_token: Pagination token if mid-window, None if starting new window
         """
+        __method_name = inspect.currentframe().f_code.co_name
         checkpoint_data = {
             "pageStartTime": page_start_time,
             "pageToken": page_token,
         }
         self.post(json.dumps(checkpoint_data))
         applogger.debug(
-            "%s: checkpoint saved (start=%s, token=%s)",
-            consts.LOG_PREFIX,
-            page_start_time[:10],  # Just show date
-            "yes" if page_token else "no",
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "StateManager",
+                f"Checkpoint saved (start={page_start_time[:10]}, token={'yes' if page_token else 'no'})"
+            )
         )
 
     def resolve_initial_start_time(self) -> Tuple[str, Optional[str]]:
@@ -181,6 +222,7 @@ class StateManager:
               - start_time: ISO timestamp to start fetching from
               - pagination_token: None (new window) or token (resume mid-window)
         """
+        __method_name = inspect.currentframe().f_code.co_name
         checkpoint = self.get_checkpoint()
 
         if checkpoint:
@@ -193,18 +235,22 @@ class StateManager:
                     # Checkpoint too old: reset to safe lookback
                     new_start = self._compute_start_time(consts.MAX_LOOKBACK_DAYS)
                     applogger.warning(
-                        "%s: checkpoint stale (>%d days), resetting to %s",
-                        consts.LOG_PREFIX,
-                        consts.MAX_LOOKBACK_DAYS,
-                        new_start[:10],
+                        consts.LOG_FORMAT.format(
+                            consts.LOG_PREFIX,
+                            __method_name,
+                            "StateManager",
+                            f"Checkpoint stale (>{consts.MAX_LOOKBACK_DAYS} days), resetting to {new_start[:10]}"
+                        )
                     )
                     return new_start, None
 
                 applogger.info(
-                    "%s: resuming from checkpoint (date=%s, token=%s)",
-                    consts.LOG_PREFIX,
-                    page_start[:10],
-                    "yes" if page_token else "no",
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        __method_name,
+                        "StateManager",
+                        f"Resuming from checkpoint (date={page_start[:10]}, token={'yes' if page_token else 'no'})"
+                    )
                 )
                 return page_start, page_token
 
@@ -213,10 +259,12 @@ class StateManager:
         start_time = self._compute_start_time(lookback_days)
 
         applogger.info(
-            "%s: no checkpoint, computed start (lookback=%d days): %s",
-            consts.LOG_PREFIX,
-            lookback_days,
-            start_time[:10],
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "StateManager",
+                f"No checkpoint, computed start (lookback={lookback_days} days): {start_time[:10]}"
+            )
         )
         return start_time, None
 
@@ -233,6 +281,7 @@ class StateManager:
         Returns:
             True if timestamp is older than MAX_LOOKBACK_DAYS, False otherwise
         """
+        __method_name = inspect.currentframe().f_code.co_name
         try:
             # Parse ISO timestamp, handling both Z and +00:00 suffix
             parsed_time = datetime.fromisoformat(
@@ -245,13 +294,25 @@ class StateManager:
             )
 
             # Stale if timestamp is before cutoff
-            return parsed_time < cutoff_time
+            is_stale = parsed_time < cutoff_time
+            if is_stale:
+                applogger.debug(
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        __method_name,
+                        "StateManager",
+                        f"Timestamp {iso_timestamp} is stale (older than {consts.MAX_LOOKBACK_DAYS} days)"
+                    )
+                )
+            return is_stale
         except (ValueError, AttributeError) as err:
             applogger.debug(
-                "%s: could not parse timestamp %s: %s",
-                consts.LOG_PREFIX,
-                iso_timestamp,
-                err,
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    "StateManager",
+                    f"Could not parse timestamp {iso_timestamp}: {err}"
+                )
             )
             return False
 

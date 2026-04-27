@@ -2,6 +2,7 @@
 
 import time
 from typing import Optional
+import inspect
 
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
@@ -21,31 +22,84 @@ class GoogleServiceAccountAuth:
         self._token_expiry: float = 0.0
 
     def _validate_and_load(self, service_account_json: str) -> None:
+        __method_name = inspect.currentframe().f_code.co_name
+
         if not service_account_json:
-            raise ChronicleAuthError("ChronicleServiceAccountJson not configured")
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "GoogleServiceAccountAuth",
+                "ChronicleServiceAccountJson not configured"
+            )
+            applogger.error(error_msg)
+            raise ChronicleAuthError(error_msg)
 
         try:
             sa_dict = json.loads(service_account_json)
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    "GoogleServiceAccountAuth",
+                    "Successfully parsed service account JSON"
+                )
+            )
         except json.JSONDecodeError as exc:
-            raise ChronicleAuthError(
-                "ChronicleServiceAccountJson invalid JSON"
-            ) from exc
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "GoogleServiceAccountAuth",
+                f"ChronicleServiceAccountJson invalid JSON: {exc}"
+            )
+            applogger.error(error_msg)
+            raise ChronicleAuthError(error_msg) from exc
 
         missing = [k for k in ("client_email", "private_key") if not sa_dict.get(k)]
         if missing:
-            raise ChronicleAuthError(f"Missing fields: {missing}")
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "GoogleServiceAccountAuth",
+                f"Missing required fields in service account: {missing}"
+            )
+            applogger.error(error_msg)
+            raise ChronicleAuthError(error_msg)
 
         try:
             self._creds = service_account.Credentials.from_service_account_info(
                 sa_dict, scopes=[consts.OAUTH_SCOPE]
             )
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    "GoogleServiceAccountAuth",
+                    "Successfully created service account credentials"
+                )
+            )
         except Exception as exc:
-            raise ChronicleAuthError(f"Failed to create credentials: {exc}") from exc
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "GoogleServiceAccountAuth",
+                f"Failed to create credentials: {exc}"
+            )
+            applogger.error(error_msg)
+            raise ChronicleAuthError(error_msg) from exc
 
     def get_access_token(self) -> str:
         """Get or refresh access token."""
+        __method_name = inspect.currentframe().f_code.co_name
         now = time.time()
         if self._is_token_valid(now):
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    "GoogleServiceAccountAuth",
+                    "Using cached access token (still valid)"
+                )
+            )
             return self._token
 
         try:
@@ -58,10 +112,24 @@ class GoogleServiceAccountAuth:
             else:
                 self._token_expiry = now + 3600
 
-            applogger.info("%s: acquired new Google access token", consts.LOG_PREFIX)
+            applogger.info(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    "GoogleServiceAccountAuth",
+                    "Successfully acquired new Google access token"
+                )
+            )
             return self._token
         except Exception as exc:
-            raise ChronicleAuthError(f"Token refresh failed: {exc}") from exc
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "GoogleServiceAccountAuth",
+                f"Token refresh failed: {exc}"
+            )
+            applogger.error(error_msg)
+            raise ChronicleAuthError(error_msg) from exc
 
     def _is_token_valid(self, now: float) -> bool:
         return (

@@ -1,20 +1,110 @@
 """Post events to Azure Log Analytics via the Azure Monitor Ingestion SDK.
 
-Uses LogsIngestionClient (DCR-based ingestion) with DefaultAzureCredential.
+Uses LogsIngestionClient (DCR-based ingestion) with either:
+- ClientSecretCredential (if AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID provided)
+- DefaultAzureCredential (fallback for managed identity, MSI, etc.)
+
 Requires a Data Collection Endpoint, Data Collection Rule immutable ID, and
 stream name configured as environment variables.
 """
 
 import inspect
 import json
+import os
 
-from azure.identity import DefaultAzureCredential
+from azure.identity import DefaultAzureCredential, ClientSecretCredential
 from azure.monitor.ingestion import LogsIngestionClient
 from azure.core.exceptions import HttpResponseError
 
 from . import consts
 from .exceptions import SentinelIngestionError
 from .logger import applogger
+
+
+def _get_credential():
+    """Get Azure credential (ClientSecretCredential if configured, otherwise DefaultAzureCredential).
+
+    Returns:
+        Azure credential object
+
+    Raises:
+        ValueError: If ClientSecretCredential is partially configured
+    """
+    __method_name = inspect.currentframe().f_code.co_name
+
+    # Check if explicit credentials are provided
+    client_id = consts.AZURE_CLIENT_ID
+    client_secret = consts.AZURE_CLIENT_SECRET
+    tenant_id = consts.AZURE_TENANT_ID
+
+    # Validate that either all or none of the credentials are provided
+    credentials_provided = [bool(client_id), bool(client_secret), bool(tenant_id)]
+    if any(credentials_provided) and not all(credentials_provided):
+        missing = []
+        if not client_id:
+            missing.append("AZURE_CLIENT_ID")
+        if not client_secret:
+            missing.append("AZURE_CLIENT_SECRET")
+        if not tenant_id:
+            missing.append("AZURE_TENANT_ID")
+
+        error_msg = consts.LOG_FORMAT.format(
+            consts.LOG_PREFIX,
+            __method_name,
+            "SentinelAuth",
+            f"Incomplete Azure authentication config: missing {missing}"
+        )
+        applogger.error(error_msg)
+        raise ValueError(error_msg)
+
+    # Use explicit credentials if all provided
+    if all(credentials_provided):
+        try:
+            credential = ClientSecretCredential(
+                client_id=client_id,
+                client_secret=client_secret,
+                tenant_id=tenant_id
+            )
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    "SentinelAuth",
+                    f"Using ClientSecretCredential (client_id={client_id[:20]}...)"
+                )
+            )
+            return credential
+        except Exception as exc:
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "SentinelAuth",
+                f"Failed to create ClientSecretCredential: type={type(exc).__name__}, reason={str(exc)[:150]}"
+            )
+            applogger.error(error_msg)
+            raise ValueError(error_msg) from exc
+
+    # Fall back to DefaultAzureCredential
+    try:
+        credential = DefaultAzureCredential()
+        applogger.debug(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "SentinelAuth",
+                "Using DefaultAzureCredential (managed identity/MSI)"
+            )
+        )
+        return credential
+    except Exception as exc:
+        error_msg = consts.LOG_FORMAT.format(
+            consts.LOG_PREFIX,
+            __method_name,
+            "SentinelAuth",
+            f"Failed to create DefaultAzureCredential: type={type(exc).__name__}, reason={str(exc)[:150]}"
+        )
+        applogger.error(error_msg)
+        raise ValueError(error_msg) from exc
 
 
 def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
@@ -28,6 +118,16 @@ def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
         SentinelIngestionError: on missing config or ingestion failure.
     """
     __method_name = inspect.currentframe().f_code.co_name
+    azure_function_name = consts.FUNCTION_NAME_INGESTER
+
+    applogger.debug(
+        consts.LOG_FORMAT.format(
+            consts.LOG_PREFIX,
+            __method_name,
+            azure_function_name,
+            "Starting Sentinel data ingestion"
+        )
+    )
 
     endpoint = consts.DCE_ENDPOINT.strip()
     rule_id = consts.DCR_IMMUTABLE_ID.strip()
@@ -43,33 +143,76 @@ def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
         if not val
     ]
     if missing:
-        raise SentinelIngestionError(
-            f"Missing env vars for Monitor ingestion: {missing}"
+        error_msg = consts.LOG_FORMAT.format(
+            consts.LOG_PREFIX,
+            __method_name,
+            azure_function_name,
+            f"Missing required configuration: {missing}"
         )
+        applogger.error(error_msg)
+        raise SentinelIngestionError(error_msg)
 
     try:
         records = json.loads(body)
+        body_size_kb = len(body.encode('utf-8')) / 1024
+        applogger.debug(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                azure_function_name,
+                f"JSON parsed: {len(records)} records, payload_size={body_size_kb:.1f}KB"
+            )
+        )
     except json.JSONDecodeError as err:
-        raise SentinelIngestionError(f"Invalid JSON body: {err}") from err
+        error_msg = consts.LOG_FORMAT.format(
+            consts.LOG_PREFIX,
+            __method_name,
+            azure_function_name,
+            f"Invalid JSON body: char={err.pos}, line={err.lineno}, reason={err.msg}"
+        )
+        applogger.error(error_msg)
+        raise SentinelIngestionError(error_msg) from err
 
     if not records:
-        applogger.debug(f"{consts.LOGS_STARTS_WITH}({__method_name}): empty batch, skip")
+        applogger.debug(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                azure_function_name,
+                "Empty batch received, skipping ingestion"
+            )
+        )
         return
 
     try:
-        credential = DefaultAzureCredential()
+        # Get Azure credential (explicit or managed identity)
+        credential = _get_credential()
         client = LogsIngestionClient(endpoint=endpoint, credential=credential)
         client.upload(rule_id=rule_id, stream_name=stream, logs=records)
+
         applogger.info(
-            f"{consts.LOGS_STARTS_WITH}({__method_name}): uploaded {len(records)} records → stream={stream}"
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                azure_function_name,
+                f"Posted: {len(records)} records to DCR stream={stream}, endpoint={consts.DCE_ENDPOINT[:30]}..."
+            )
         )
     except HttpResponseError as err:
-        applogger.error(
-            f"{consts.LOGS_STARTS_WITH}({__method_name}): HTTP error: {err}"
+        error_msg = consts.LOG_FORMAT.format(
+            consts.LOG_PREFIX,
+            __method_name,
+            azure_function_name,
+            f"HTTP error during ingestion: status={err.status_code}, stream={stream}, reason={str(err)[:150]}"
         )
-        raise SentinelIngestionError(f"HTTP error: {err}") from err
+        applogger.error(error_msg)
+        raise SentinelIngestionError(error_msg) from err
     except Exception as err:
-        applogger.error(
-            f"{consts.LOGS_STARTS_WITH}({__method_name}): unexpected error: {err}"
+        error_msg = consts.LOG_FORMAT.format(
+            consts.LOG_PREFIX,
+            __method_name,
+            azure_function_name,
+            f"Unexpected error during ingestion: type={type(err).__name__}, stream={stream}, reason={str(err)[:150]}"
         )
-        raise SentinelIngestionError(f"Unexpected error: {err}") from err
+        applogger.error(error_msg)
+        raise SentinelIngestionError(error_msg) from err
