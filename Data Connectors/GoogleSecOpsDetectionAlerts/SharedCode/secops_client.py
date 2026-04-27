@@ -97,14 +97,6 @@ def parse_stream(response: "httpx.Response") -> Iterator[dict]:
 
             # batch_json = line[start_idx : end_idx + 1]
             batch_json = "{" + line.split("{", 1)[1].rsplit("}", 1)[0] + "}"
-            applogger.debug(
-                consts.LOG_FORMAT.format(
-                    consts.LOG_PREFIX,
-                    "parse_stream",
-                    "SecOpsAPI",
-                    f"batch_json: {batch_json}",
-                )
-            )
 
             try:
                 batch = json.loads(batch_json)
