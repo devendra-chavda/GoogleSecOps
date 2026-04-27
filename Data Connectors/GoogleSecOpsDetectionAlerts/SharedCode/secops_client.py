@@ -51,9 +51,16 @@ def parse_stream(response: "httpx.Response") -> Iterator[dict]:
         SecOpsApiError: On parse failure or stream read error
     """
     total_bytes_read = 0
+    #TODO: remove
+    lines_received = 0
+    batches_found = 0
+    heartbeats_skipped = 0
+    #TODO: remove
 
     try:
         for line in response.iter_lines():
+            #TODO: remove
+            lines_received += 1
             # Skip empty/whitespace lines
             if not line or not line.strip():
                 continue
@@ -77,15 +84,37 @@ def parse_stream(response: "httpx.Response") -> Iterator[dict]:
             end_idx = line.rfind("}")
 
             if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
+                #TODO: remove
+                applogger.debug(
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        "parse_stream",
+                        "SecOpsAPI",
+                        f"Line {lines_received}: No braces found (skipped)",
+                    )
+                )
                 continue
 
             batch_json = line[start_idx : end_idx + 1]
 
             try:
                 batch = json.loads(batch_json)
+                #TODO: remove
+                batches_found += 1
 
                 # Skip heartbeat messages
                 if isinstance(batch, dict) and batch.get("heartbeat"):
+                    #TODO: remove -->
+                    heartbeats_skipped += 1
+                    applogger.debug(
+                        consts.LOG_FORMAT.format(
+                            consts.LOG_PREFIX,
+                            "parse_stream",
+                            "SecOpsAPI",
+                            f"Heartbeat received (total: {heartbeats_skipped})",
+                        )
+                    )
+                    #TODO: remove <--
                     continue
 
                 yield batch
@@ -117,6 +146,15 @@ def parse_stream(response: "httpx.Response") -> Iterator[dict]:
             )
         )
         raise SecOpsApiError(error_msg) from exc
+    finally:
+        applogger.info(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                "parse_stream",
+                "SecOpsAPI",
+                f"Stream complete: lines_received={lines_received}, batches_found={batches_found}, heartbeats_skipped={heartbeats_skipped}, total_bytes={total_bytes_read}",
+            )
+        )
 
 
 class SecOpsClient:
