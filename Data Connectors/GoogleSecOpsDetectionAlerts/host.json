@@ -9,9 +9,10 @@
       }
     },
     "logLevel": {
-      "default": "Information",
-      "Host.Results": "Information",
-      "Function": "Information"
+      "default": "Trace",
+      "Host.Results": "Trace",
+      "Function": "Trace",
+      "Host.Aggregator": "Trace"
     }
   },
   "extensionBundle": {
