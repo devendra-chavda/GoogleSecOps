@@ -176,7 +176,7 @@ class SecOpsClient:
     def _build_endpoint(project_id: str, region: str, instance_id: str) -> str:
         """Build SecOps API endpoint URL."""
         return (
-            f"https://{region}-secops.googleapis.com/v1alpha/"
+            f"https://{region}-chronicle.googleapis.com/v1alpha/"
             f"projects/{project_id}/locations/{region}/"
             f"instances/{instance_id}/legacy:legacyStreamDetectionAlerts"
         )
