@@ -33,13 +33,13 @@
         "description": "Enter name of the table used to store detection alerts. Default is 'GCSDetectionAlerts'."
       }
     },
-    "ChronicleProjectId": {
+    "SecOpsProjectId": {
       "type": "string",
       "metadata": {
-        "description": "Google Cloud project ID hosting the Chronicle instance."
+        "description": "Google Cloud project ID hosting the SecOps instance."
       }
     },
-    "ChronicleRegion": {
+    "SecOpsRegion": {
       "type": "string",
       "defaultValue": "us",
       "allowedValues": [
@@ -67,16 +67,16 @@
         "southamerica-east1"
       ],
       "metadata": {
-        "description": "Chronicle instance region. Select from the dropdown list of supported regions."
+        "description": "SecOps instance region. Select from the dropdown list of supported regions."
       }
     },
-    "ChronicleInstanceId": {
+    "SecOpsInstanceId": {
       "type": "string",
       "metadata": {
-        "description": "Chronicle instance ID."
+        "description": "SecOps instance ID."
       }
     },
-    "ChronicleServiceAccountJson": {
+    "SecOpsServiceAccountJson": {
       "type": "securestring",
       "metadata": {
         "description": "Full JSON content of the Google Cloud service-account key."
@@ -529,13 +529,13 @@
             "APPLICATIONINSIGHTS_CONNECTION_STRING": "[reference(resourceId('microsoft.insights/components', variables('FunctionName')), '2015-05-01').ConnectionString]",
             "AzureWebJobsStorage": "[concat('DefaultEndpointsProtocol=https;AccountName=', toLower(variables('FunctionName')),';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', toLower(variables('FunctionName'))), '2019-06-01').keys[0].value, ';EndpointSuffix=',toLower(variables('StorageSuffix')))]",
             "Schedule": "[parameters('Schedule')]",
-            "ChronicleProjectId": "[parameters('ChronicleProjectId')]",
-            "ChronicleRegion": "[parameters('ChronicleRegion')]",
-            "ChronicleInstanceId": "[parameters('ChronicleInstanceId')]",
-            "ChronicleServiceAccountJson": "[parameters('ChronicleServiceAccountJson')]",
+            "SecOpsProjectId": "[parameters('SecOpsProjectId')]",
+            "SecOpsRegion": "[parameters('SecOpsRegion')]",
+            "SecOpsInstanceId": "[parameters('SecOpsInstanceId')]",
+            "SecOpsServiceAccountJson": "[parameters('SecOpsServiceAccountJson')]",
             "LookbackDays": "[string(parameters('LookbackDays'))]",
             "GCSDetectionAlertsTableName": "[parameters('GCSDetectionAlertsTableName')]",
-            "StateTableName": "GoogleChronicleState",
+            "StateTableName": "GoogleSecOpsState",
             "LogLevel": "[parameters('LogLevel')]",
             "AZURE_CLIENT_ID": "[parameters('AzureClientId')]",
             "AZURE_CLIENT_SECRET": "[parameters('AzureClientSecret')]",

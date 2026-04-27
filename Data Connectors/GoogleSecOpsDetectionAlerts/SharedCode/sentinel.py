@@ -52,7 +52,7 @@ def _get_credential():
             consts.LOG_PREFIX,
             __method_name,
             "SentinelAuth",
-            f"Incomplete Azure authentication config: missing {missing}"
+            f"Incomplete Azure authentication config: missing {missing}",
         )
         applogger.error(error_msg)
         raise ValueError(error_msg)
@@ -61,16 +61,14 @@ def _get_credential():
     if all(credentials_provided):
         try:
             credential = ClientSecretCredential(
-                client_id=client_id,
-                client_secret=client_secret,
-                tenant_id=tenant_id
+                client_id=client_id, client_secret=client_secret, tenant_id=tenant_id
             )
             applogger.debug(
                 consts.LOG_FORMAT.format(
                     consts.LOG_PREFIX,
                     __method_name,
                     "SentinelAuth",
-                    f"Using ClientSecretCredential (client_id={client_id[:20]}...)"
+                    f"Using ClientSecretCredential (client_id={client_id[:20]}...)",
                 )
             )
             return credential
@@ -79,7 +77,7 @@ def _get_credential():
                 consts.LOG_PREFIX,
                 __method_name,
                 "SentinelAuth",
-                f"Failed to create ClientSecretCredential: type={type(exc).__name__}, reason={str(exc)[:150]}"
+                f"Failed to create ClientSecretCredential: type={type(exc).__name__}, reason={str(exc)[:150]}",
             )
             applogger.error(error_msg)
             raise ValueError(error_msg) from exc
@@ -92,7 +90,7 @@ def _get_credential():
                 consts.LOG_PREFIX,
                 __method_name,
                 "SentinelAuth",
-                "Using DefaultAzureCredential (managed identity/MSI)"
+                "Using DefaultAzureCredential (managed identity/MSI)",
             )
         )
         return credential
@@ -101,7 +99,7 @@ def _get_credential():
             consts.LOG_PREFIX,
             __method_name,
             "SentinelAuth",
-            f"Failed to create DefaultAzureCredential: type={type(exc).__name__}, reason={str(exc)[:150]}"
+            f"Failed to create DefaultAzureCredential: type={type(exc).__name__}, reason={str(exc)[:150]}",
         )
         applogger.error(error_msg)
         raise ValueError(error_msg) from exc
@@ -125,7 +123,7 @@ def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
             consts.LOG_PREFIX,
             __method_name,
             azure_function_name,
-            "Starting Sentinel data ingestion"
+            "Starting Sentinel data ingestion",
         )
     )
 
@@ -147,20 +145,20 @@ def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
             consts.LOG_PREFIX,
             __method_name,
             azure_function_name,
-            f"Missing required configuration: {missing}"
+            f"Missing required configuration: {missing}",
         )
         applogger.error(error_msg)
         raise SentinelIngestionError(error_msg)
 
     try:
         records = json.loads(body)
-        body_size_kb = len(body.encode('utf-8')) / 1024
+        body_size_kb = len(body.encode("utf-8")) / 1024
         applogger.debug(
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
                 azure_function_name,
-                f"JSON parsed: {len(records)} records, payload_size={body_size_kb:.1f}KB"
+                f"JSON parsed: {len(records)} records, payload_size={body_size_kb:.1f}KB",
             )
         )
     except json.JSONDecodeError as err:
@@ -168,7 +166,7 @@ def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
             consts.LOG_PREFIX,
             __method_name,
             azure_function_name,
-            f"Invalid JSON body: char={err.pos}, line={err.lineno}, reason={err.msg}"
+            f"Invalid JSON body: char={err.pos}, line={err.lineno}, reason={err.msg}",
         )
         applogger.error(error_msg)
         raise SentinelIngestionError(error_msg) from err
@@ -179,7 +177,7 @@ def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
                 consts.LOG_PREFIX,
                 __method_name,
                 azure_function_name,
-                "Empty batch received, skipping ingestion"
+                "Empty batch received, skipping ingestion",
             )
         )
         return
@@ -195,7 +193,7 @@ def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
                 consts.LOG_PREFIX,
                 __method_name,
                 azure_function_name,
-                f"Posted: {len(records)} records to DCR stream={stream}, endpoint={consts.DCE_ENDPOINT[:30]}..."
+                f"Posted: {len(records)} records to DCR stream={stream}, endpoint={consts.DCE_ENDPOINT[:30]}...",
             )
         )
     except HttpResponseError as err:
@@ -203,7 +201,7 @@ def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
             consts.LOG_PREFIX,
             __method_name,
             azure_function_name,
-            f"HTTP error during ingestion: status={err.status_code}, stream={stream}, reason={str(err)[:150]}"
+            f"HTTP error during ingestion: status={err.status_code}, stream={stream}, reason={str(err)[:150]}",
         )
         applogger.error(error_msg)
         raise SentinelIngestionError(error_msg) from err
@@ -212,7 +210,7 @@ def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
             consts.LOG_PREFIX,
             __method_name,
             azure_function_name,
-            f"Unexpected error during ingestion: type={type(err).__name__}, stream={stream}, reason={str(err)[:150]}"
+            f"Unexpected error during ingestion: type={type(err).__name__}, stream={stream}, reason={str(err)[:150]}",
         )
         applogger.error(error_msg)
         raise SentinelIngestionError(error_msg) from err

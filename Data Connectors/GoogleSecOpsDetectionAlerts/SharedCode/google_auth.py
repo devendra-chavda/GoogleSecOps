@@ -9,7 +9,7 @@ from google.auth.transport.requests import Request
 import json
 
 from . import consts
-from .exceptions import ChronicleAuthError
+from .exceptions import SecOpsAuthError
 from .logger import applogger
 
 
@@ -29,10 +29,10 @@ class GoogleServiceAccountAuth:
                 consts.LOG_PREFIX,
                 __method_name,
                 "GoogleServiceAccountAuth",
-                "ChronicleServiceAccountJson not configured"
+                "SecOpsServiceAccountJson not configured",
             )
             applogger.error(error_msg)
-            raise ChronicleAuthError(error_msg)
+            raise SecOpsAuthError(error_msg)
 
         try:
             sa_dict = json.loads(service_account_json)
@@ -41,7 +41,7 @@ class GoogleServiceAccountAuth:
                     consts.LOG_PREFIX,
                     __method_name,
                     "GoogleServiceAccountAuth",
-                    "Successfully parsed service account JSON"
+                    "Successfully parsed service account JSON",
                 )
             )
         except json.JSONDecodeError as exc:
@@ -49,10 +49,10 @@ class GoogleServiceAccountAuth:
                 consts.LOG_PREFIX,
                 __method_name,
                 "GoogleServiceAccountAuth",
-                f"ChronicleServiceAccountJson invalid JSON: {exc}"
+                f"SecOpsServiceAccountJson invalid JSON: {exc}",
             )
             applogger.error(error_msg)
-            raise ChronicleAuthError(error_msg) from exc
+            raise SecOpsAuthError(error_msg) from exc
 
         missing = [k for k in ("client_email", "private_key") if not sa_dict.get(k)]
         if missing:
@@ -60,10 +60,10 @@ class GoogleServiceAccountAuth:
                 consts.LOG_PREFIX,
                 __method_name,
                 "GoogleServiceAccountAuth",
-                f"Missing required fields in service account: {missing}"
+                f"Missing required fields in service account: {missing}",
             )
             applogger.error(error_msg)
-            raise ChronicleAuthError(error_msg)
+            raise SecOpsAuthError(error_msg)
 
         try:
             self._creds = service_account.Credentials.from_service_account_info(
@@ -74,7 +74,7 @@ class GoogleServiceAccountAuth:
                     consts.LOG_PREFIX,
                     __method_name,
                     "GoogleServiceAccountAuth",
-                    "Successfully created service account credentials"
+                    "Successfully created service account credentials",
                 )
             )
         except Exception as exc:
@@ -82,10 +82,10 @@ class GoogleServiceAccountAuth:
                 consts.LOG_PREFIX,
                 __method_name,
                 "GoogleServiceAccountAuth",
-                f"Failed to create credentials: {exc}"
+                f"Failed to create credentials: {exc}",
             )
             applogger.error(error_msg)
-            raise ChronicleAuthError(error_msg) from exc
+            raise SecOpsAuthError(error_msg) from exc
 
     def get_access_token(self) -> str:
         """Get or refresh access token."""
@@ -97,7 +97,7 @@ class GoogleServiceAccountAuth:
                     consts.LOG_PREFIX,
                     __method_name,
                     "GoogleServiceAccountAuth",
-                    "Using cached access token (still valid)"
+                    "Using cached access token (still valid)",
                 )
             )
             return self._token
@@ -117,7 +117,7 @@ class GoogleServiceAccountAuth:
                     consts.LOG_PREFIX,
                     __method_name,
                     "GoogleServiceAccountAuth",
-                    "Successfully acquired new Google access token"
+                    "Successfully acquired new Google access token",
                 )
             )
             return self._token
@@ -126,10 +126,10 @@ class GoogleServiceAccountAuth:
                 consts.LOG_PREFIX,
                 __method_name,
                 "GoogleServiceAccountAuth",
-                f"Token refresh failed: {exc}"
+                f"Token refresh failed: {exc}",
             )
             applogger.error(error_msg)
-            raise ChronicleAuthError(error_msg) from exc
+            raise SecOpsAuthError(error_msg) from exc
 
     def _is_token_valid(self, now: float) -> bool:
         return (

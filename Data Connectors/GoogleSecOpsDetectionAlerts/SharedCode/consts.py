@@ -1,17 +1,16 @@
 """Configuration constants for Google SecOps Detection Alerts connector.
 
 This module defines all environment variables, defaults, and tuning parameters
-for the two-function pipeline that fetches detections from Google Chronicle
+for the two-function pipeline that fetches detections from Google SecOps
 and ingests them into Microsoft Sentinel.
 
 Pipeline Overview:
-  1. GoogleSecOpsToStorage: Polls Chronicle API → saves to Azure File Share
+  1. GoogleSecOpsToStorage: Polls SecOps API → saves to Azure File Share
   2. AzureStorageToSentinel: Monitors share → posts to Sentinel via DCR API
 """
 
 import os
 from .utils import parse_cron_timeout
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # APPLICATION METADATA
@@ -22,8 +21,10 @@ LOG_PREFIX = "GoogleSecOpsDetectionAlerts"  # Prefix for all log messages
 LOG_LEVEL = os.environ.get("LogLevel", "INFO")  # DEBUG, INFO, WARNING, ERROR
 LOG_FORMAT = "{}(method = {}) : {} : {}"  # Format: PREFIX(method) : FUNCTION : MESSAGE
 
-FUNCTION_NAME_FETCHER = "GoogleSecOpsToStorage"  # First function (Chronicle → Storage)
-FUNCTION_NAME_INGESTER = "AzureStorageToSentinel"  # Second function (Storage → Sentinel)
+FUNCTION_NAME_FETCHER = "GoogleSecOpsToStorage"  # First function (SecOps → Storage)
+FUNCTION_NAME_INGESTER = (
+    "AzureStorageToSentinel"  # Second function (Storage → Sentinel)
+)
 
 # Error messages
 UNEXPECTED_ERROR_MSG = "Unexpected error: {}"
@@ -34,18 +35,20 @@ VALIDATION_ERROR_MSG = "Validation error: {}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CHRONICLE API CONFIGURATION
+# SECOPS API CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 # Required: Set via ARM template or environment variables
-# These connect to your Google SecOps (Chronicle) instance
+# These connect to your Google SecOps instance
 
-CHRONICLE_PROJECT_ID = os.environ.get("ChronicleProjectId", "")
-CHRONICLE_REGION = os.environ.get("ChronicleRegion", "us")  # us, europe, asia-southeast1
-CHRONICLE_INSTANCE_ID = os.environ.get("ChronicleInstanceId", "")
-SERVICE_ACCOUNT_JSON = os.environ.get("ChronicleServiceAccountJson", "")
+SECOPS_PROJECT_ID = os.environ.get("SecOpsProjectId", "")
+SECOPS_REGION = os.environ.get("SecOpsRegion", "us")  # us, europe, asia-southeast1
+SECOPS_INSTANCE_ID = os.environ.get("SecOpsInstanceId", "")
+SERVICE_ACCOUNT_JSON = os.environ.get("SecOpsServiceAccountJson", "")
 
-# Google OAuth configuration for Chronicle API authentication
-OAUTH_SCOPE = os.environ.get("OAuthScope", "https://www.googleapis.com/auth/cloud-platform")
+# Google OAuth configuration for SecOps API authentication
+OAUTH_SCOPE = os.environ.get(
+    "OAuthScope", "https://www.googleapis.com/auth/cloud-platform"
+)
 TOKEN_EXPIRY_BUFFER_SECONDS = 60  # Refresh token 60s before expiry
 
 
@@ -54,7 +57,9 @@ TOKEN_EXPIRY_BUFFER_SECONDS = 60  # Refresh token 60s before expiry
 # ═══════════════════════════════════════════════════════════════════════════════
 # File shares for checkpoint tracking and raw data storage
 
-CONN_STRING = os.environ.get("AzureWebJobsStorage", "")  # Storage account connection string
+CONN_STRING = os.environ.get(
+    "AzureWebJobsStorage", ""
+)  # Storage account connection string
 
 # State management (checkpoint tracking)
 FILE_SHARE_NAME = os.environ.get("FileShareName", "google-secops-state")
@@ -85,13 +90,13 @@ AZURE_TENANT_ID = os.environ.get("AZURE_TENANT_ID", "")
 # ═══════════════════════════════════════════════════════════════════════════════
 # DETECTION FETCHING PARAMETERS
 # ═══════════════════════════════════════════════════════════════════════════════
-# Control how many detections are fetched from Chronicle in each operation
+# Control how many detections are fetched from SecOps in each operation
 
 LOOKBACK_DAYS = int(os.environ.get("LookbackDays", "1"))  # Default: 1 day back
 MAX_LOOKBACK_DAYS = 7  # Safety limit: never go back more than 7 days
 
 DETECTION_BATCH_SIZE = int(os.environ.get("DetectionBatchSize", "1000"))
-# How many detections per Chronicle API page (Chronicle's pagination)
+# How many detections per SecOps API page (SecOps pagination)
 
 MAX_DETECTIONS = int(os.environ.get("MaxDetections", "1000"))
 # How many detections to fetch before stopping (per run)
@@ -108,7 +113,7 @@ INGESTION_BATCH_SIZE = 500
 
 # File age before ingester picks it up (seconds)
 # Prevents race condition: gives fetcher time to finish writing before ingester reads
-MAX_FILE_AGE_FOR_INGESTION = 300  # 5 minutes
+MAX_FILE_AGE_FOR_INGESTION = 120  # 2 minutes
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -125,9 +130,9 @@ BUSY_WAIT_SLEEP_SECONDS = 10  # Sleep between checks (avoids CPU spinning)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Error handling and timeouts for API calls
 
-# Chronicle API streaming timeout
+# SecOps API streaming timeout
 API_TIMEOUT_SECONDS = 300  # 5 minutes
-# Chronicle server sends heartbeat every ~15 seconds
+# SecOps server sends heartbeat every ~15 seconds
 # 300s timeout is safe for detecting truly dead connections
 
 # Retry behavior for transient errors

@@ -1,6 +1,6 @@
-"""Client for Google Chronicle Detection Alerts API.
+"""Client for Google SecOps Detection Alerts API.
 
-This module provides a client for polling Google SecOps (Chronicle) for
+This module provides a client for polling Google SecOps for
 detection alerts. The API sends a never-ending JSON stream of detection batches.
 
 Key Concepts:
@@ -20,10 +20,9 @@ import inspect
 import httpx
 
 from . import consts
-from .exceptions import ChronicleApiError, ChronicleConnectorError
+from .exceptions import SecOpsApiError, SecOpsConnectorError
 from .google_auth import GoogleServiceAccountAuth
 from .logger import applogger
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # INTERNAL CONFIGURATION
@@ -38,8 +37,90 @@ HTTP_POOL_TIMEOUT = 30.0
 PROGRESS_LOG_THRESHOLD = 1024 * 1024  # Log every 1 MB
 
 
-class ChronicleClient:
-    """Client for polling Google Chronicle Detection Alerts API.
+def parse_stream(response: "httpx.Response") -> Iterator[dict]:
+    """Parse detection batches from SecOps API streaming response.
+
+    Based on XSOAR/Demisto implementation. Extracts JSON objects from stream
+    by isolating content between braces. The response is a stream of JSON
+    array elements - each line may contain complete or partial JSON objects.
+
+    Yields:
+        Parsed JSON batch dictionaries from the stream
+
+    Raises:
+        SecOpsApiError: On parse failure or stream read error
+    """
+    total_bytes_read = 0
+
+    try:
+        for line in response.iter_lines():
+            # Skip empty/whitespace lines
+            if not line or not line.strip():
+                continue
+
+            total_bytes_read += len(line.encode("utf-8"))
+
+            # Log progress every 1 MB
+            if total_bytes_read > 0 and total_bytes_read % PROGRESS_LOG_THRESHOLD == 0:
+                applogger.info(
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        "parse_stream",
+                        "SecOpsAPI",
+                        f"Streaming... {total_bytes_read / (1024 * 1024):.1f}MB",
+                    )
+                )
+
+            # Trim characters before first { and after last }
+            # This handles whitespace/malformed JSON around the object
+            start_idx = line.find("{")
+            end_idx = line.rfind("}")
+
+            if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
+                continue
+
+            batch_json = line[start_idx : end_idx + 1]
+
+            try:
+                batch = json.loads(batch_json)
+
+                # Skip heartbeat messages
+                if isinstance(batch, dict) and batch.get("heartbeat"):
+                    continue
+
+                yield batch
+
+            except json.JSONDecodeError as err:
+                applogger.warning(
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        "parse_stream",
+                        "SecOpsAPI",
+                        f"JSON parse error: {err.msg}",
+                    )
+                )
+                continue
+
+    except httpx.TimeoutException as exc:
+        error_msg = f"Stream read timeout: {exc}"
+        applogger.error(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX, "parse_stream", "SecOpsAPI", error_msg
+            )
+        )
+        raise SecOpsApiError(error_msg) from exc
+    except Exception as exc:
+        error_msg = f"Stream read error: {exc}"
+        applogger.error(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX, "parse_stream", "SecOpsAPI", error_msg
+            )
+        )
+        raise SecOpsApiError(error_msg) from exc
+
+
+class SecOpsClient:
+    """Client for polling Google SecOps Detection Alerts API.
 
     Handles:
     - Authentication via Google service account
@@ -52,17 +133,17 @@ class ChronicleClient:
     def __init__(
         self,
         auth: GoogleServiceAccountAuth,
-        project_id: str = consts.CHRONICLE_PROJECT_ID,
-        region: str = consts.CHRONICLE_REGION,
-        instance_id: str = consts.CHRONICLE_INSTANCE_ID,
+        project_id: str = consts.SECOPS_PROJECT_ID,
+        region: str = consts.SECOPS_REGION,
+        instance_id: str = consts.SECOPS_INSTANCE_ID,
     ):
-        """Initialize Chronicle client.
+        """Initialize SecOps client.
 
         Args:
             auth: GoogleServiceAccountAuth instance for API authentication
-            project_id: Chronicle project ID
-            region: Chronicle region (us, europe, asia-southeast1)
-            instance_id: Chronicle instance ID
+            project_id: SecOps project ID
+            region: SecOps region (us, europe, asia-southeast1)
+            instance_id: SecOps instance ID
 
         Raises:
             ValueError: If any required configuration is missing
@@ -73,8 +154,8 @@ class ChronicleClient:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "ChronicleClient",
-                f"Missing Chronicle config: project_id={project_id}, region={region}, instance_id={instance_id}"
+                "SecOpsClient",
+                f"Missing SecOps config: project_id={project_id}, region={region}, instance_id={instance_id}",
             )
             applogger.error(error_msg)
             raise ValueError(error_msg)
@@ -86,16 +167,16 @@ class ChronicleClient:
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "ChronicleClient",
-                f"Initialized Chronicle client with endpoint: {self._endpoint[:50]}..."
+                "SecOpsClient",
+                f"Initialized SecOps client with endpoint: {self._endpoint[:50]}...",
             )
         )
 
     @staticmethod
     def _build_endpoint(project_id: str, region: str, instance_id: str) -> str:
-        """Build Chronicle API endpoint URL."""
+        """Build SecOps API endpoint URL."""
         return (
-            f"https://{region}-chronicle.googleapis.com/v1alpha/"
+            f"https://{region}-secops.googleapis.com/v1alpha/"
             f"projects/{project_id}/locations/{region}/"
             f"instances/{instance_id}/legacy:legacyStreamDetectionAlerts"
         )
@@ -110,9 +191,9 @@ class ChronicleClient:
         page_token: Optional[str] = None,
         deadline_epoch: Optional[float] = None,
     ) -> Iterator[Tuple[dict, Optional[str], Optional[str]]]:
-        """Poll Chronicle API for detection batches.
+        """Poll SecOps API for detection batches.
 
-        Yields detection batches from the Chronicle API with automatic retry on
+        Yields detection batches from the SecOps API with automatic retry on
         transient failures. Returns when: (1) time budget exhausted, or
         (2) pagination window complete (nextPageStartTime received).
 
@@ -128,7 +209,7 @@ class ChronicleClient:
               - next_start_time: New start time if window complete (for next window)
 
         Raises:
-            ChronicleConnectorError: If too many consecutive API failures
+            SecOpsConnectorError: If too many consecutive API failures
         """
         __method_name = inspect.currentframe().f_code.co_name
         current_token = page_token
@@ -139,8 +220,8 @@ class ChronicleClient:
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "ChronicleClient",
-                f"Starting detection batch polling from {page_start_time}"
+                "SecOpsClient",
+                f"Starting detection batch polling from {page_start_time}",
             )
         )
 
@@ -150,11 +231,11 @@ class ChronicleClient:
                 error_msg = consts.LOG_FORMAT.format(
                     consts.LOG_PREFIX,
                     __method_name,
-                    "ChronicleClient",
-                    f"Too many consecutive API failures: {consecutive_failures}"
+                    "SecOpsClient",
+                    f"Too many consecutive API failures: {consecutive_failures}",
                 )
                 applogger.error(error_msg)
-                raise ChronicleConnectorError(error_msg)
+                raise SecOpsConnectorError(error_msg)
 
             # Exponential backoff on retry
             if consecutive_failures > 0:
@@ -176,8 +257,8 @@ class ChronicleClient:
                     consts.LOG_FORMAT.format(
                         consts.LOG_PREFIX,
                         __method_name,
-                        "ChronicleClient",
-                        f"API call failed, retrying (attempt {consecutive_failures}/{consts.MAX_CONSECUTIVE_FAILURES}): {str(exc)[:100]}"
+                        "SecOpsClient",
+                        f"API call failed, retrying (attempt {consecutive_failures}/{consts.MAX_CONSECUTIVE_FAILURES}): {str(exc)[:100]}",
                     )
                 )
                 continue
@@ -197,8 +278,8 @@ class ChronicleClient:
                     consts.LOG_FORMAT.format(
                         consts.LOG_PREFIX,
                         __method_name,
-                        "ChronicleClient",
-                        "Window complete, moving to next"
+                        "SecOpsClient",
+                        "Window complete, moving to next",
                     )
                 )
                 return
@@ -208,8 +289,8 @@ class ChronicleClient:
                     consts.LOG_FORMAT.format(
                         consts.LOG_PREFIX,
                         __method_name,
-                        "ChronicleClient",
-                        "Time budget exhausted"
+                        "SecOpsClient",
+                        "Time budget exhausted",
                     )
                 )
                 return
@@ -228,7 +309,7 @@ class ChronicleClient:
         page_token: Optional[str],
         deadline: Optional[float],
     ) -> dict:
-        """Make single streaming HTTP request to Chronicle API.
+        """Make single streaming HTTP request to SecOps API.
 
         Args:
             page_start: Window start time
@@ -239,8 +320,8 @@ class ChronicleClient:
             Parsed JSON batch dict
 
         Raises:
-            ChronicleApiError: On HTTP errors or stream read failures
-            ChronicleConnectorError: If deadline exceeded
+            SecOpsApiError: On HTTP errors or stream read failures
+            SecOpsConnectorError: If deadline exceeded
         """
         __method_name = inspect.currentframe().f_code.co_name
 
@@ -249,11 +330,11 @@ class ChronicleClient:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "ChronicleClient",
-                "Time budget exhausted before API call"
+                "SecOpsClient",
+                "Time budget exhausted before API call",
             )
             applogger.error(error_msg)
-            raise ChronicleConnectorError(error_msg)
+            raise SecOpsConnectorError(error_msg)
 
         # Build request body
         request_body = self._build_request_body(page_start, page_token)
@@ -276,8 +357,8 @@ class ChronicleClient:
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "ChronicleClient",
-                f"API call (batch={consts.DETECTION_BATCH_SIZE}, max={consts.MAX_DETECTIONS}, timeout={consts.API_TIMEOUT_SECONDS}s)"
+                "SecOpsClient",
+                f"API call (batch={consts.DETECTION_BATCH_SIZE}, max={consts.MAX_DETECTIONS}, timeout={consts.API_TIMEOUT_SECONDS}s)",
             )
         )
 
@@ -290,33 +371,38 @@ class ChronicleClient:
                     # Handle HTTP errors
                     self._check_response_status(response, page_token, page_start)
 
-                    batch = self._read_stream_batch(
-                        response, consts.API_TIMEOUT_SECONDS
-                    )
-                    return batch
+                    # Extract first JSON batch from streaming response
+                    try:
+                        for batch in parse_stream(response):
+                            return batch
+                        raise SecOpsApiError("No batches received")
+                    except SecOpsApiError:
+                        raise
+                    except Exception as exc:
+                        raise SecOpsApiError(f"Error reading batch: {exc}") from exc
 
         except httpx.RequestError as exc:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "ChronicleClient",
-                f"Network error: {exc}"
+                "SecOpsClient",
+                f"Network error: {exc}",
             )
             applogger.error(error_msg)
-            raise ChronicleApiError(error_msg) from exc
+            raise SecOpsApiError(error_msg) from exc
         except Exception as exc:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "ChronicleClient",
-                f"Unexpected error during API call: {exc}"
+                "SecOpsClient",
+                f"Unexpected error during API call: {exc}",
             )
             applogger.error(error_msg)
-            raise ChronicleApiError(error_msg) from exc
+            raise SecOpsApiError(error_msg) from exc
 
     @staticmethod
     def _build_request_body(page_start: str, page_token: Optional[str]) -> dict:
-        """Build Chronicle API request body.
+        """Build SecOps API request body.
 
         Args:
             page_start: Time window start (used if no token)
@@ -352,7 +438,7 @@ class ChronicleClient:
             page_start: Request's start time
 
         Raises:
-            ChronicleApiError: On HTTP error responses
+            SecOpsApiError: On HTTP error responses
         """
         __method_name = inspect.currentframe().f_code.co_name
 
@@ -360,11 +446,11 @@ class ChronicleClient:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "ChronicleClient",
-                "Unauthorized (401) - check service account credentials"
+                "SecOpsClient",
+                "Unauthorized (401) - check service account credentials",
             )
             applogger.error(error_msg)
-            raise ChronicleApiError(error_msg, status_code=401)
+            raise SecOpsApiError(error_msg, status_code=401)
 
         if response.status_code == 400:
             try:
@@ -375,209 +461,22 @@ class ChronicleClient:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "ChronicleClient",
-                f"Bad Request (400): {error_details}. Params: batchSize={consts.DETECTION_BATCH_SIZE}, pageToken={'set' if page_token else 'not set'}"
+                "SecOpsClient",
+                f"Bad Request (400): {error_details}. Params: batchSize={consts.DETECTION_BATCH_SIZE}, pageToken={'set' if page_token else 'not set'}",
             )
             applogger.error(error_msg)
-            raise ChronicleApiError(error_msg, status_code=400)
+            raise SecOpsApiError(error_msg, status_code=400)
 
         if response.status_code >= 400:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "ChronicleClient",
-                f"HTTP error {response.status_code}"
+                "SecOpsClient",
+                f"HTTP error {response.status_code}",
             )
             applogger.error(error_msg)
-            raise ChronicleApiError(error_msg, status_code=response.status_code)
+            raise SecOpsApiError(error_msg, status_code=response.status_code)
 
-    # ═══════════════════════════════════════════════════════════════════════════════
-    # INTERNAL: STREAM PARSING (Brace-Depth Tracking)
-    # ═══════════════════════════════════════════════════════════════════════════════
-
-    def _read_stream_batch(
-        self,
-        response: "httpx.Response",
-        timeout_seconds: int,
-    ) -> dict:
-        """Extract first complete JSON batch from never-ending streaming array.
-
-        Chronicle sends: [{batch1}, {batch2}, {batch3}, ...]
-
-        This method uses character-level brace-depth tracking to identify where
-        one batch object ends and the next begins. This allows extracting
-        complete JSON objects from a continuous stream without buffering.
-
-        Algorithm:
-        1. Track brace depth: depth++ on {, depth-- on }
-        2. Ignore braces inside strings (handle \" escapes)
-        3. When depth goes 0→0 (object complete), parse and return
-        4. Skip heartbeat-only messages and continue reading
-        5. Timeout if no new line arrives for timeout_seconds
-
-        Args:
-            response: Open httpx streaming response
-            timeout_seconds: Max seconds to wait between line arrivals
-
-        Returns:
-            First non-heartbeat batch dict
-
-        Raises:
-            ChronicleApiError: On timeout, JSON parse error, or stream error
-        """
-        __method_name = inspect.currentframe().f_code.co_name
-        # Parser state
-        brace_depth = 0
-        current_batch_chars = []
-        inside_string = False
-        escape_next = False
-        last_line_received = time.time()
-        total_bytes_read = 0
-
-        applogger.debug(
-            consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                "ChronicleClient",
-                "Starting to read streaming batch from Chronicle API"
-            )
-        )
-
-        try:
-            for line in response.iter_lines():
-                # Check: have we waited too long without data?
-                now = time.time()
-                time_since_last_line = now - last_line_received
-                if time_since_last_line > timeout_seconds and brace_depth > 0:
-                    error_msg = consts.LOG_FORMAT.format(
-                        consts.LOG_PREFIX,
-                        __method_name,
-                        "ChronicleClient",
-                        f"Stream timeout: no data for {timeout_seconds}s"
-                    )
-                    applogger.error(error_msg)
-                    raise ChronicleApiError(error_msg)
-
-                # Skip empty/whitespace lines
-                if not line or line.isspace():
-                    continue
-
-                last_line_received = now
-                total_bytes_read += len(line.encode("utf-8"))
-
-                # Log progress every 1 MB (helps diagnose hangs)
-                if total_bytes_read > 0 and total_bytes_read % PROGRESS_LOG_THRESHOLD == 0:
-                    applogger.info(
-                        consts.LOG_FORMAT.format(
-                            consts.LOG_PREFIX,
-                            __method_name,
-                            "ChronicleClient",
-                            f"Reading stream... {total_bytes_read / (1024 * 1024):.1f} MB"
-                        )
-                    )
-
-                # Process each character to track braces
-                for char in line:
-                    # Handle escape sequences in strings
-                    if escape_next:
-                        escape_next = False
-                        if brace_depth > 0:
-                            current_batch_chars.append(char)
-                        continue
-
-                    if char == "\\" and inside_string:
-                        escape_next = True
-                        if brace_depth > 0:
-                            current_batch_chars.append(char)
-                        continue
-
-                    # Toggle string state on unescaped quotes
-                    if char == '"':
-                        inside_string = not inside_string
-                        if brace_depth > 0:
-                            current_batch_chars.append(char)
-                        continue
-
-                    # Add everything inside strings as-is
-                    if inside_string:
-                        if brace_depth > 0:
-                            current_batch_chars.append(char)
-                        continue
-
-                    # Track brace depth (outside strings only)
-                    if char == "{":
-                        brace_depth += 1
-                        current_batch_chars.append(char)
-                    elif char == "}":
-                        if brace_depth > 0:
-                            current_batch_chars.append(char)
-                            brace_depth -= 1
-
-                            # Object complete: parse and check
-                            if brace_depth == 0:
-                                batch_json = "".join(current_batch_chars)
-                                current_batch_chars = []
-
-                                try:
-                                    batch = json.loads(batch_json)
-
-                                    # Skip heartbeat messages (keep-alives)
-                                    if isinstance(batch, dict) and batch.get("heartbeat"):
-                                        applogger.debug(
-                                            consts.LOG_FORMAT.format(
-                                                consts.LOG_PREFIX,
-                                                __method_name,
-                                                "ChronicleClient",
-                                                "Skipping heartbeat message"
-                                            )
-                                        )
-                                        continue
-
-                                    # Return first real batch
-                                    applogger.debug(
-                                        consts.LOG_FORMAT.format(
-                                            consts.LOG_PREFIX,
-                                            __method_name,
-                                            "ChronicleClient",
-                                            f"Batch parsed successfully, size: {len(batch_json)} bytes"
-                                        )
-                                    )
-                                    return batch
-
-                                except json.JSONDecodeError as err:
-                                    applogger.warning(
-                                        consts.LOG_FORMAT.format(
-                                            consts.LOG_PREFIX,
-                                            __method_name,
-                                            "ChronicleClient",
-                                            f"JSON parse error: {err}"
-                                        )
-                                    )
-                    elif brace_depth > 0:
-                        current_batch_chars.append(char)
-
-        except httpx.TimeoutException as exc:
-            error_msg = consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                "ChronicleClient",
-                f"HTTP read timeout: {exc}"
-            )
-            applogger.error(error_msg)
-            raise ChronicleApiError(error_msg) from exc
-        except ChronicleApiError:
-            raise
-        except Exception as exc:
-            error_msg = consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                "ChronicleClient",
-                f"Error reading stream: {exc}"
-            )
-            applogger.error(error_msg)
-            raise ChronicleApiError(error_msg) from exc
-
-    # ═══════════════════════════════════════════════════════════════════════════════
     # INTERNAL: RETRY LOGIC
     # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -599,7 +498,7 @@ class ChronicleClient:
         Returns:
             True if error is transient and should trigger retry
         """
-        if isinstance(exc, ChronicleApiError):
+        if isinstance(exc, SecOpsApiError):
             return exc.status_code in consts.RETRYABLE_STATUS_CODES
 
         return isinstance(exc, (httpx.TimeoutException, httpx.RequestError))
@@ -615,16 +514,13 @@ class ChronicleClient:
             attempt: Attempt number (1, 2, 3, ...)
         """
         __method_name = inspect.currentframe().f_code.co_name
-        delay = (
-            consts.RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
-            + random.uniform(0, 1.0)
-        )
+        delay = consts.RETRY_BASE_DELAY_SECONDS * (2**attempt) + random.uniform(0, 1.0)
         applogger.debug(
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "ChronicleClient",
-                f"Backoff {delay:.1f}s before retry {attempt}/{consts.MAX_CONSECUTIVE_FAILURES}"
+                "SecOpsClient",
+                f"Backoff {delay:.1f}s before retry {attempt}/{consts.MAX_CONSECUTIVE_FAILURES}",
             )
         )
         time.sleep(delay)

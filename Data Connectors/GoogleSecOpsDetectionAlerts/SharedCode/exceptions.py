@@ -1,16 +1,16 @@
-"""Exceptions for Chronicle connector."""
+"""Exceptions for SecOps connector."""
 
 
-class ChronicleConnectorError(Exception):
-    """Base error for the Chronicle connector."""
+class SecOpsConnectorError(Exception):
+    """Base error for the SecOps connector."""
 
 
-class ChronicleAuthError(ChronicleConnectorError):
+class SecOpsAuthError(SecOpsConnectorError):
     """Raised when Google OAuth token acquisition fails."""
 
 
-class ChronicleApiError(ChronicleConnectorError):
-    """Raised when the Chronicle API returns a non-retryable error."""
+class SecOpsApiError(SecOpsConnectorError):
+    """Raised when the SecOps API returns a non-retryable error."""
 
     def __init__(self, message: str, status_code: int = 0, body: str = ""):
         super().__init__(message)
@@ -18,5 +18,5 @@ class ChronicleApiError(ChronicleConnectorError):
         self.body = body
 
 
-class SentinelIngestionError(ChronicleConnectorError):
+class SentinelIngestionError(SecOpsConnectorError):
     """Raised when posting to Sentinel DCR fails."""

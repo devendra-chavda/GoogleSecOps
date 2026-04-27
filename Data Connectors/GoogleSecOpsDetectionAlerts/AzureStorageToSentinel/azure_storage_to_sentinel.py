@@ -35,7 +35,7 @@ class AzureStorageToSentinel:
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_INGESTER,
-                    f"Initialized Azure File Share client for share={consts.FILE_SHARE_NAME_DATA}"
+                    f"Initialized Azure File Share client for share={consts.FILE_SHARE_NAME_DATA}",
                 )
             )
         except Exception as exc:
@@ -43,94 +43,85 @@ class AzureStorageToSentinel:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"Failed to initialize Azure File Share client: {exc}"
+                f"Failed to initialize Azure File Share client: {exc}",
             )
             applogger.error(error_msg)
             raise
 
     def run(self) -> None:
-        """Process response files from Azure File Share and post to Sentinel."""
+        """Process response files from Azure File Share and post to Sentinel.
+
+        Runs once per timer trigger. Processes all eligible aged files in one cycle.
+        """
         __method_name = inspect.currentframe().f_code.co_name
-        deadline = time.time() + consts.FUNCTION_APP_TIMEOUT_SECONDS
+        start_time = time.time()
 
         applogger.info(
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"Sentinel ingestion started: timeout={consts.FUNCTION_APP_TIMEOUT_SECONDS}s, batch_size={consts.INGESTION_BATCH_SIZE}, check_interval={consts.FILE_CHECK_INTERVAL_SECONDS}s"
+                f"Ingestion cycle started: batch_size={consts.INGESTION_BATCH_SIZE}",
             )
         )
 
-        # Counters for tracking pipeline flow
         total_extracted = 0
         total_posted = 0
         files_processed = 0
-        last_check_time = time.time()
-        start_time = time.time()
 
         try:
-            while time.time() < deadline:
-                # Check for files at configured interval
-                time_since_last_check = time.time() - last_check_time
-                should_check_files = (
-                    time_since_last_check >= consts.FILE_CHECK_INTERVAL_SECONDS
-                    or last_check_time == start_time  # First iteration
+            # Check for eligible files once per invocation
+            file_names = self._list_eligible_files()
+
+            if not file_names:
+                applogger.info(
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        __method_name,
+                        consts.FUNCTION_NAME_INGESTER,
+                        "No eligible files found",
+                    )
                 )
+                return
 
-                if should_check_files:
-                    file_names = self._list_eligible_files()
-                    last_check_time = time.time()
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_INGESTER,
+                    f"Processing {len(file_names)} eligible files",
+                )
+            )
 
-                    if file_names:
-                        applogger.debug(
-                            consts.LOG_FORMAT.format(
-                                consts.LOG_PREFIX,
-                                __method_name,
-                                consts.FUNCTION_NAME_INGESTER,
-                                f"Found {len(file_names)} eligible files for ingestion"
-                            )
-                        )
-                        for filename in file_names:
-                            extracted, posted = self._process_response_file(filename)
-                            total_extracted += extracted
-                            total_posted += posted
-                            files_processed += 1
-                    else:
-                        remaining = deadline - time.time()
-                        applogger.debug(
-                            consts.LOG_FORMAT.format(
-                                consts.LOG_PREFIX,
-                                __method_name,
-                                consts.FUNCTION_NAME_INGESTER,
-                                f"No eligible files found, waiting {remaining:.0f}s"
-                            )
-                        )
-
-                # Brief sleep to avoid busy spinning
-                time.sleep(consts.BUSY_WAIT_SLEEP_SECONDS)
+            # Process all eligible files in this cycle
+            for filename in file_names:
+                extracted, posted = self._process_response_file(filename)
+                total_extracted += extracted
+                total_posted += posted
+                files_processed += 1
 
         except Exception as exc:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"Error during ingestion loop: {exc}"
+                f"Error during ingestion: {exc}",
             )
             applogger.error(error_msg)
             raise
 
         runtime = time.time() - start_time
-        success_rate = (total_posted / total_extracted * 100) if total_extracted > 0 else 0
+        success_rate = (
+            (total_posted / total_extracted * 100) if total_extracted > 0 else 0
+        )
         applogger.info(
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"Ingestion complete: files_processed={files_processed}, total_extracted={total_extracted}, total_posted={total_posted}, success_rate={success_rate:.1f}%, runtime={runtime:.1f}s"
+                f"Cycle complete: files={files_processed}, extracted={total_extracted}, posted={total_posted}, success_rate={success_rate:.1f}%, runtime={runtime:.1f}s",
             )
         )
-
 
     def _list_eligible_files(self) -> list:
         """List response files ready for ingestion (aged files only).
@@ -155,7 +146,7 @@ class AzureStorageToSentinel:
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_INGESTER,
-                    f"Listed {len(all_files)} files in data share"
+                    f"Listed {len(all_files)} files in data share",
                 )
             )
         except ResourceNotFoundError:
@@ -164,7 +155,7 @@ class AzureStorageToSentinel:
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_INGESTER,
-                    "Data share not found, no files available (this is normal on first run)"
+                    "Data share not found, no files available (this is normal on first run)",
                 )
             )
             return []
@@ -173,7 +164,7 @@ class AzureStorageToSentinel:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"Critical error listing files from data share: {exc}"
+                f"Critical error listing files from data share: {exc}",
             )
             applogger.error(error_msg)
             raise
@@ -184,7 +175,7 @@ class AzureStorageToSentinel:
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_INGESTER,
-                    "No files found in data share"
+                    "No files found in data share",
                 )
             )
             return []
@@ -204,7 +195,7 @@ class AzureStorageToSentinel:
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_INGESTER,
-                    f"Found {len(eligible_files)} eligible files (aged > {consts.MAX_FILE_AGE_FOR_INGESTION}s)"
+                    f"Found {len(eligible_files)} eligible files (aged > {consts.MAX_FILE_AGE_FOR_INGESTION}s)",
                 )
             )
 
@@ -238,7 +229,7 @@ class AzureStorageToSentinel:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"Processing file: {filename}"
+                f"Processing file: {filename}",
             )
         )
 
@@ -256,19 +247,19 @@ class AzureStorageToSentinel:
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_INGESTER,
-                    f"File empty: {filename} (0 bytes), skipping"
+                    f"File empty: {filename} (0 bytes), skipping",
                 )
             )
             sm.delete()
             return 0, 0
 
-        content_size_kb = len(raw_content.encode('utf-8')) / 1024
+        content_size_kb = len(raw_content.encode("utf-8")) / 1024
         applogger.debug(
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"File read: {filename}, size={content_size_kb:.1f}KB"
+                f"File read: {filename}, size={content_size_kb:.1f}KB",
             )
         )
 
@@ -280,7 +271,7 @@ class AzureStorageToSentinel:
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_INGESTER,
-                    f"JSON parsed: {filename}, structure={type(response).__name__}, keys={list(response.keys()) if isinstance(response, dict) else 'N/A'}"
+                    f"JSON parsed: {filename}, structure={type(response).__name__}, keys={list(response.keys()) if isinstance(response, dict) else 'N/A'}",
                 )
             )
         except json.JSONDecodeError as err:
@@ -288,7 +279,7 @@ class AzureStorageToSentinel:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"CRITICAL: Invalid JSON in {filename}: char={err.pos}, line={err.lineno}, reason={err.msg}"
+                f"CRITICAL: Invalid JSON in {filename}: char={err.pos}, line={err.lineno}, reason={err.msg}",
             )
             applogger.error(error_msg)
             sm.delete()
@@ -302,7 +293,7 @@ class AzureStorageToSentinel:
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_INGESTER,
-                    f"No detections: {filename} (response structure had no detections array), skipping"
+                    f"No detections: {filename} (response structure had no detections array), skipping",
                 )
             )
             sm.delete()
@@ -314,7 +305,7 @@ class AzureStorageToSentinel:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"Extracted: {extracted_count} detections from {filename} ({content_size_kb:.1f}KB file)"
+                f"Extracted: {extracted_count} detections from {filename} ({content_size_kb:.1f}KB file)",
             )
         )
 
@@ -328,7 +319,7 @@ class AzureStorageToSentinel:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"Deleted file {filename}"
+                f"Deleted file {filename}",
             )
         )
 
@@ -363,14 +354,16 @@ class AzureStorageToSentinel:
         """
         __method_name = inspect.currentframe().f_code.co_name
         total_count = len(detections)
-        batch_count = (total_count + consts.INGESTION_BATCH_SIZE - 1) // consts.INGESTION_BATCH_SIZE
+        batch_count = (
+            total_count + consts.INGESTION_BATCH_SIZE - 1
+        ) // consts.INGESTION_BATCH_SIZE
 
         applogger.debug(
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"Posting: total={total_count}, batches={batch_count}, batch_size={consts.INGESTION_BATCH_SIZE}, source={filename}"
+                f"Posting: total={total_count}, batches={batch_count}, batch_size={consts.INGESTION_BATCH_SIZE}, source={filename}",
             )
         )
 
@@ -392,7 +385,7 @@ class AzureStorageToSentinel:
                         consts.LOG_PREFIX,
                         __method_name,
                         consts.FUNCTION_NAME_INGESTER,
-                        f"Batch {batch_num}/{batch_count} posted: size={batch_size}, cumulative={posted_count}/{total_count}"
+                        f"Batch {batch_num}/{batch_count} posted: size={batch_size}, cumulative={posted_count}/{total_count}",
                     )
                 )
             except Exception as exc:
@@ -400,7 +393,7 @@ class AzureStorageToSentinel:
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_INGESTER,
-                    f"CRITICAL - Batch {batch_num}/{batch_count} failed: batch_size={batch_size}, posted_so_far={posted_count}/{total_count}, error_type={type(exc).__name__}, reason={str(exc)[:150]}"
+                    f"CRITICAL - Batch {batch_num}/{batch_count} failed: batch_size={batch_size}, posted_so_far={posted_count}/{total_count}, error_type={type(exc).__name__}, reason={str(exc)[:150]}",
                 )
                 applogger.error(error_msg)
                 raise
@@ -410,7 +403,7 @@ class AzureStorageToSentinel:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"All batches posted successfully: total={posted_count}/{total_count}, batches={batch_count}, stream={consts.DCR_STREAM_NAME}"
+                f"All batches posted successfully: total={posted_count}/{total_count}, batches={batch_count}, stream={consts.DCR_STREAM_NAME}",
             )
         )
 

@@ -1,6 +1,6 @@
 """Timer-trigger entry point for the GoogleSecOpsToStorage function.
 
-Fetches detection alerts from the Google SecOps (Chronicle) API and saves
+Fetches detection alerts from the Google SecOps API and saves
 raw detection batches to Azure File Share for durable buffering.
 
 The companion AzureStorageToSentinel function monitors the file share and
@@ -20,7 +20,7 @@ from .google_secops_to_storage import GoogleSecOpsToStorage
 
 
 def main(mytimer: func.TimerRequest) -> None:
-    """Fetch detection alerts from Chronicle and save to Azure File Share."""
+    """Fetch detection alerts from SecOps and save to Azure File Share."""
     start = datetime.datetime.now(datetime.timezone.utc)
 
     applogger.info(

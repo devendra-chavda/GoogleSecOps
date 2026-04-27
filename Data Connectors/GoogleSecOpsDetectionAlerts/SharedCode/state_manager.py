@@ -2,7 +2,7 @@
 
 This module handles:
 1. Checkpoint persistence: tracks API pagination state between runs
-2. Data file I/O: stores raw detection batches from Chronicle
+2. Data file I/O: stores raw detection batches from SecOps
 3. Time window management: computes lookback windows for fetching
 
 Checkpoint Format:
@@ -28,7 +28,6 @@ from azure.storage.fileshare import ShareClient, ShareFileClient
 from . import consts
 from .logger import applogger
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -42,7 +41,7 @@ class StateManager:
 
     Two use cases:
     1. Checkpoint tracking: save pagination state between function invocations
-    2. Raw data storage: buffer detection batches from Chronicle before ingestion
+    2. Raw data storage: buffer detection batches from SecOps before ingestion
     """
 
     def __init__(
@@ -68,7 +67,7 @@ class StateManager:
                 consts.LOG_PREFIX,
                 __method_name,
                 "StateManager",
-                "Azure Storage connection string required (AzureWebJobsStorage)"
+                "Azure Storage connection string required (AzureWebJobsStorage)",
             )
             applogger.error(error_msg)
             raise ValueError(error_msg)
@@ -88,7 +87,7 @@ class StateManager:
                 consts.LOG_PREFIX,
                 __method_name,
                 "StateManager",
-                f"Initialized StateManager for share={share_name}, file={file_path}"
+                f"Initialized StateManager for share={share_name}, file={file_path}",
             )
         )
 
@@ -155,7 +154,7 @@ class StateManager:
                     consts.LOG_PREFIX,
                     __method_name,
                     "StateManager",
-                    "No checkpoint file found"
+                    "No checkpoint file found",
                 )
             )
             return None
@@ -167,7 +166,7 @@ class StateManager:
                     consts.LOG_PREFIX,
                     __method_name,
                     "StateManager",
-                    f"Successfully loaded checkpoint: {checkpoint}"
+                    f"Successfully loaded checkpoint: {checkpoint}",
                 )
             )
             return checkpoint
@@ -177,7 +176,7 @@ class StateManager:
                     consts.LOG_PREFIX,
                     __method_name,
                     "StateManager",
-                    f"Checkpoint file is corrupt (invalid JSON), discarding: {err}"
+                    f"Checkpoint file is corrupt (invalid JSON), discarding: {err}",
                 )
             )
             return None
@@ -204,7 +203,7 @@ class StateManager:
                 consts.LOG_PREFIX,
                 __method_name,
                 "StateManager",
-                f"Checkpoint saved (start={page_start_time[:10]}, token={'yes' if page_token else 'no'})"
+                f"Checkpoint saved (start={page_start_time[:10]}, token={'yes' if page_token else 'no'})",
             )
         )
 
@@ -239,7 +238,7 @@ class StateManager:
                             consts.LOG_PREFIX,
                             __method_name,
                             "StateManager",
-                            f"Checkpoint stale (>{consts.MAX_LOOKBACK_DAYS} days), resetting to {new_start[:10]}"
+                            f"Checkpoint stale (>{consts.MAX_LOOKBACK_DAYS} days), resetting to {new_start[:10]}",
                         )
                     )
                     return new_start, None
@@ -249,7 +248,7 @@ class StateManager:
                         consts.LOG_PREFIX,
                         __method_name,
                         "StateManager",
-                        f"Resuming from checkpoint (date={page_start[:10]}, token={'yes' if page_token else 'no'})"
+                        f"Resuming from checkpoint (date={page_start[:10]}, token={'yes' if page_token else 'no'})",
                     )
                 )
                 return page_start, page_token
@@ -263,7 +262,7 @@ class StateManager:
                 consts.LOG_PREFIX,
                 __method_name,
                 "StateManager",
-                f"No checkpoint, computed start (lookback={lookback_days} days): {start_time[:10]}"
+                f"No checkpoint, computed start (lookback={lookback_days} days): {start_time[:10]}",
             )
         )
         return start_time, None
@@ -284,9 +283,7 @@ class StateManager:
         __method_name = inspect.currentframe().f_code.co_name
         try:
             # Parse ISO timestamp, handling both Z and +00:00 suffix
-            parsed_time = datetime.fromisoformat(
-                iso_timestamp.replace("Z", "+00:00")
-            )
+            parsed_time = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
 
             # Compute cutoff: now - MAX_LOOKBACK_DAYS
             cutoff_time = datetime.now(timezone.utc) - timedelta(
@@ -301,7 +298,7 @@ class StateManager:
                         consts.LOG_PREFIX,
                         __method_name,
                         "StateManager",
-                        f"Timestamp {iso_timestamp} is stale (older than {consts.MAX_LOOKBACK_DAYS} days)"
+                        f"Timestamp {iso_timestamp} is stale (older than {consts.MAX_LOOKBACK_DAYS} days)",
                     )
                 )
             return is_stale
@@ -311,7 +308,7 @@ class StateManager:
                     consts.LOG_PREFIX,
                     __method_name,
                     "StateManager",
-                    f"Could not parse timestamp {iso_timestamp}: {err}"
+                    f"Could not parse timestamp {iso_timestamp}: {err}",
                 )
             )
             return False
@@ -320,7 +317,7 @@ class StateManager:
         """Compute ISO timestamp for N days ago with buffer.
 
         Adds a buffer to prevent missing data at time window boundaries.
-        Useful when Chronicle's time windows align with exact seconds.
+        Useful when SecOps time windows align with exact seconds.
 
         Formula: now - days_ago - LOOKBACK_BUFFER_MINUTES
 

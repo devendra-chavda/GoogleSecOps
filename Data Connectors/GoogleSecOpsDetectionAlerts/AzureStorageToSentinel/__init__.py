@@ -22,8 +22,6 @@ def main(mytimer: func.TimerRequest) -> None:
     """Ingest detection files from Azure File Share into Microsoft Sentinel."""
     start = datetime.datetime.now(datetime.timezone.utc)
 
-
-
     if mytimer.past_due:
         applogger.warning("%s: timer is past due", consts.LOG_PREFIX)
 

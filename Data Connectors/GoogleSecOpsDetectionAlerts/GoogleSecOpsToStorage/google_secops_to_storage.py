@@ -1,6 +1,6 @@
-"""Fetch detection alerts from Google SecOps (Chronicle) and save to Azure File Share.
+"""Fetch detection alerts from Google SecOps and save to Azure File Share.
 
-Polls the Chronicle API for detection alerts and saves each response batch
+Polls the SecOps API for detection alerts and saves each response batch
 to Azure File Share for durable buffering. The companion AzureStorageToSentinel
 function monitors and ingests the files into Microsoft Sentinel.
 """
@@ -10,21 +10,21 @@ import json
 import time
 
 from ..SharedCode import consts
-from ..SharedCode.chronicle_client import ChronicleClient
-from ..SharedCode.exceptions import ChronicleConnectorError
+from ..SharedCode.secops_client import SecOpsClient
+from ..SharedCode.exceptions import SecOpsConnectorError
 from ..SharedCode.google_auth import GoogleServiceAccountAuth
 from ..SharedCode.logger import applogger
 from ..SharedCode.state_manager import StateManager
 
 
 class GoogleSecOpsToStorage:
-    """Fetch detection batches from Chronicle and save to Azure File Share."""
+    """Fetch detection batches from SecOps and save to Azure File Share."""
 
     def __init__(self) -> None:
-        """Initialize Chronicle client, checkpoint manager, and validate configuration."""
+        """Initialize SecOps client, checkpoint manager, and validate configuration."""
         self._validate_env_vars()
         self._auth = GoogleServiceAccountAuth()
-        self._client = ChronicleClient(self._auth)
+        self._client = SecOpsClient(self._auth)
         self._checkpoint = StateManager(
             connection_string=consts.CONN_STRING,
             file_path=consts.CHECKPOINT_FILE_NAME,
@@ -41,10 +41,10 @@ class GoogleSecOpsToStorage:
         __method_name = inspect.currentframe().f_code.co_name
         required_vars = [
             ("AzureWebJobsStorage", consts.CONN_STRING),
-            ("ChronicleProjectId", consts.CHRONICLE_PROJECT_ID),
-            ("ChronicleRegion", consts.CHRONICLE_REGION),
-            ("ChronicleInstanceId", consts.CHRONICLE_INSTANCE_ID),
-            ("ChronicleServiceAccountJson", consts.SERVICE_ACCOUNT_JSON),
+            ("SecOpsProjectId", consts.SECOPS_PROJECT_ID),
+            ("SecOpsRegion", consts.SECOPS_REGION),
+            ("SecOpsInstanceId", consts.SECOPS_INSTANCE_ID),
+            ("SecOpsServiceAccountJson", consts.SERVICE_ACCOUNT_JSON),
             ("AZURE_DATA_COLLECTION_ENDPOINT", consts.DCE_ENDPOINT),
             ("DCR_RULE_ID", consts.DCR_IMMUTABLE_ID),
             ("DcrStreamName", consts.DCR_STREAM_NAME),
@@ -55,13 +55,16 @@ class GoogleSecOpsToStorage:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_FETCHER,
-                f"Missing required environment variables: {missing}"
+                f"Missing required environment variables: {missing}",
             )
             applogger.error(error_msg)
             raise ValueError(error_msg)
 
     def run(self) -> None:
-        """Fetch detection batches from Chronicle API and save to Azure File Share."""
+        """Fetch detection batches from SecOps API and save to Azure File Share.
+
+        Runs once per timer trigger. Fetches all available batches and updates checkpoint.
+        """
         __method_name = inspect.currentframe().f_code.co_name
         page_start, page_token = self._checkpoint.resolve_initial_start_time()
 
@@ -70,83 +73,43 @@ class GoogleSecOpsToStorage:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_FETCHER,
-                f"Starting Chronicle polling (checkpoint: start={page_start[:10]}, token={'yes' if page_token else 'no'}, timeout={consts.FUNCTION_APP_TIMEOUT_SECONDS}s)"
+                f"Fetching: start={page_start[:10]}, token={'yes' if page_token else 'no'}",
             )
         )
 
-        deadline = time.time() + consts.FUNCTION_APP_TIMEOUT_SECONDS
         batch_count = 0
         total_detections = 0
 
-        applogger.debug(
-            consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                consts.FUNCTION_NAME_FETCHER,
-                f"Deadline set to {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(deadline))} ({deadline - time.time():.0f}s from now)"
-            )
-        )
-
         try:
-            applogger.debug(
-                consts.LOG_FORMAT.format(
-                    consts.LOG_PREFIX,
-                    __method_name,
-                    consts.FUNCTION_NAME_FETCHER,
-                    "Beginning API polling loop"
-                )
-            )
             for batch, next_token, next_start in self._client.poll_detection_batches(
                 page_start_time=page_start,
                 page_token=page_token,
-                deadline_epoch=deadline,
+                deadline_epoch=None,  # No deadline - run until window complete
             ):
                 batch_count += 1
 
-                # Save batch to file and track detection count
+                # Save batch to file
                 batch_detection_count = self._write_response_to_file(batch, batch_count)
                 total_detections += batch_detection_count
 
                 # Update checkpoint after successful save
                 self._update_checkpoint(page_start, next_token, next_start)
 
-                # Check if time budget is exhausted
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    applogger.warning(
-                        consts.LOG_FORMAT.format(
-                            consts.LOG_PREFIX,
-                            __method_name,
-                            consts.FUNCTION_NAME_FETCHER,
-                            f"Time budget exhausted after batch #{batch_count}, stopping"
-                        )
-                    )
-                    break
-
-                applogger.debug(
-                    consts.LOG_FORMAT.format(
-                        consts.LOG_PREFIX,
-                        __method_name,
-                        consts.FUNCTION_NAME_FETCHER,
-                        f"Batch #{batch_count} complete ({remaining:.0f}s remaining)"
-                    )
-                )
-
             applogger.info(
                 consts.LOG_FORMAT.format(
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_FETCHER,
-                    "Polling loop completed normally"
+                    f"Fetch cycle complete: batches={batch_count}, detections={total_detections}",
                 )
             )
 
-        except ChronicleConnectorError as exc:
+        except SecOpsConnectorError as exc:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_FETCHER,
-                f"CRITICAL: Chronicle API error after {batch_count} batches: {exc}"
+                f"CRITICAL: API error (batches={batch_count}): {exc}",
             )
             applogger.error(error_msg)
             raise
@@ -155,20 +118,10 @@ class GoogleSecOpsToStorage:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_FETCHER,
-                f"CRITICAL: Unexpected error after {batch_count} batches: {exc}"
+                f"CRITICAL: Unexpected error (batches={batch_count}): {exc}",
             )
             applogger.error(error_msg)
             raise
-
-        runtime = time.time() - self._start_time
-        applogger.info(
-            consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                consts.FUNCTION_NAME_FETCHER,
-                f"Complete (batches={batch_count}, detections={total_detections}, runtime={runtime:.1f}s)"
-            )
-        )
 
     def _write_response_to_file(self, response: dict, index: int) -> int:
         """Save full API response to Azure File Share.
@@ -187,7 +140,9 @@ class GoogleSecOpsToStorage:
         filename = f"{consts.FILE_NAME_PREFIX}_{current_epoch}_{index}"
 
         # Extract detection count
-        detections = response.get("detections", []) if isinstance(response, dict) else []
+        detections = (
+            response.get("detections", []) if isinstance(response, dict) else []
+        )
         detection_count = len(detections) if isinstance(detections, list) else 0
 
         # Log response summary
@@ -196,7 +151,7 @@ class GoogleSecOpsToStorage:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_FETCHER,
-                f"API response #{index} has {detection_count} detections (keys={list(response.keys()) if isinstance(response, dict) else 'N/A'})"
+                f"API response #{index} has {detection_count} detections (keys={list(response.keys()) if isinstance(response, dict) else 'N/A'})",
             )
         )
         applogger.debug(
@@ -204,7 +159,7 @@ class GoogleSecOpsToStorage:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_FETCHER,
-                f"Response #{index} structure: type={type(response).__name__}, top_level_keys={list(response.keys()) if isinstance(response, dict) else 'N/A'}"
+                f"Response #{index} structure: type={type(response).__name__}, top_level_keys={list(response.keys()) if isinstance(response, dict) else 'N/A'}",
             )
         )
 
@@ -226,7 +181,7 @@ class GoogleSecOpsToStorage:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_FETCHER,
-                f"Batch #{index} saved: detections={detection_count}, file_size={size_kb:.1f}KB, write_time={write_elapsed:.2f}s, filename={filename}"
+                f"Batch #{index} saved: detections={detection_count}, file_size={size_kb:.1f}KB, write_time={write_elapsed:.2f}s, filename={filename}",
             )
         )
 
@@ -258,7 +213,7 @@ class GoogleSecOpsToStorage:
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_FETCHER,
-                    f"Window complete, checkpoint advanced to {next_start} (update={elapsed:.2f}s)"
+                    f"Window complete, checkpoint advanced to {next_start} (update={elapsed:.2f}s)",
                 )
             )
         elif next_token:
@@ -270,6 +225,6 @@ class GoogleSecOpsToStorage:
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_FETCHER,
-                    f"Mid-window checkpoint saved with pagination token (update={elapsed:.2f}s)"
+                    f"Mid-window checkpoint saved with pagination token (update={elapsed:.2f}s)",
                 )
             )
