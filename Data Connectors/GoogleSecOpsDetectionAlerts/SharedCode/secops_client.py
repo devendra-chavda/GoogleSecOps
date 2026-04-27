@@ -80,22 +80,31 @@ def parse_stream(response: "httpx.Response") -> Iterator[dict]:
 
             # Trim characters before first { and after last }
             # This handles whitespace/malformed JSON around the object
-            start_idx = line.find("{")
-            end_idx = line.rfind("}")
+            # start_idx = line.find("{")
+            # end_idx = line.rfind("}")
 
-            if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
-                #TODO: remove
-                applogger.debug(
-                    consts.LOG_FORMAT.format(
-                        consts.LOG_PREFIX,
-                        "parse_stream",
-                        "SecOpsAPI",
-                        f"Line {lines_received}: No braces found (skipped)",
-                    )
+            # if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
+            #     #TODO: remove
+            #     applogger.debug(
+            #         consts.LOG_FORMAT.format(
+            #             consts.LOG_PREFIX,
+            #             "parse_stream",
+            #             "SecOpsAPI",
+            #             f"Line {lines_received}: No braces found (skipped)",
+            #         )
+            #     )
+            #     continue
+
+            # batch_json = line[start_idx : end_idx + 1]
+            batch_json = "{" + line.split("{", 1)[1].rsplit("}", 1)[0] + "}"
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    "parse_stream",
+                    "SecOpsAPI",
+                    f"batch_json: {batch_json}",
                 )
-                continue
-
-            batch_json = line[start_idx : end_idx + 1]
+            )
 
             try:
                 batch = json.loads(batch_json)
