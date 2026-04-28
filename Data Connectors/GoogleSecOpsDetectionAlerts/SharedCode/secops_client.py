@@ -40,9 +40,9 @@ PROGRESS_LOG_THRESHOLD = 1024 * 1024  # Log every 1 MB
 def parse_stream(response: "httpx.Response") -> Iterator[dict]:
     """Parse detection batches from SecOps API streaming response.
 
-    Based on XSOAR/Demisto implementation. Extracts JSON objects from stream
-    by isolating content between braces. The response is a stream of JSON
-    array elements - each line may contain complete or partial JSON objects.
+    Based on XSOAR/Demisto implementation. Accumulates bytes from stream
+    and detects complete JSON objects by tracking brace depth.
+    The response is a continuous stream of JSON objects.
 
     Yields:
         Parsed JSON batch dictionaries from the stream
@@ -58,86 +58,168 @@ def parse_stream(response: "httpx.Response") -> Iterator[dict]:
     #TODO: remove
 
     try:
-        for line in response.iter_lines(decode_unicode=True, delimiter="\r\n"):
-            #TODO: remove
-            lines_received += 1
-            # Skip empty/whitespace lines
-            if not line or not line.strip():
-                continue
+        for chunk in response.iter_bytes(chunk_size=8192, decode_unicode=True):
+            buffer += chunk
+            total_bytes_read += len(chunk.encode("utf-8"))
 
-            # total_bytes_read += len(line.encode("utf-8"))
-
-            # # Log progress every 1 MB
-            # if total_bytes_read > 0 and total_bytes_read % PROGRESS_LOG_THRESHOLD == 0:
-            #     applogger.info(
-            #         consts.LOG_FORMAT.format(
-            #             consts.LOG_PREFIX,
-            #             "parse_stream",
-            #             "SecOpsAPI",
-            #             f"Streaming... {total_bytes_read / (1024 * 1024):.1f}MB",
-            #         )
-            #     )
-
-            # Trim characters before first { and after last }
-            # This handles whitespace/malformed JSON around the object
-            # start_idx = line.find("{")
-            # end_idx = line.rfind("}")
-
-            # if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
-            #     #TODO: remove
-            #     applogger.debug(
-            #         consts.LOG_FORMAT.format(
-            #             consts.LOG_PREFIX,
-            #             "parse_stream",
-            #             "SecOpsAPI",
-            #             f"Line {lines_received}: No braces found (skipped)",
-            #         )
-            #     )
-            #     continue
-
-            # batch_json = line[start_idx : end_idx + 1]
-            batch_json = "{" + line.split("{", 1)[1].rsplit("}", 1)[0] + "}"
-
-            try:
-                batch = json.loads(batch_json)
-                applogger.debug(
-                        consts.LOG_FORMAT.format(
-                            consts.LOG_PREFIX,
-                            "parse_stream",
-                            "SecOpsAPI",
-                            f"batch received : {batch})",
-                        )
+            # Log progress every 1 MB
+            if total_bytes_read > 0 and total_bytes_read % PROGRESS_LOG_THRESHOLD == 0:
+                applogger.info(
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        "parse_stream",
+                        "SecOpsAPI",
+                        f"Streaming... {total_bytes_read / (1024 * 1024):.1f}MB",
                     )
-                #TODO: remove
-                batches_found += 1
+                )
 
-                # Skip heartbeat messages
-                if isinstance(batch, dict) and batch.get("heartbeat"):
-                    #TODO: remove -->
-                    heartbeats_skipped += 1
+            # Extract complete JSON objects from buffer by tracking brace depth
+            while buffer:
+                # Skip whitespace and find first opening brace
+                start_idx = buffer.find("{")
+                if start_idx == -1:
+                    buffer = buffer[buffer.rfind("}") + 1:] if buffer.rfind("}") != -1 else ""
+                    break
+
+                # Track brace depth to find matching closing brace
+                brace_depth = 0
+                end_idx = -1
+                for i in range(start_idx, len(buffer)):
+                    if buffer[i] == "{":
+                        brace_depth += 1
+                    elif buffer[i] == "}":
+                        brace_depth -= 1
+                        if brace_depth == 0:
+                            end_idx = i
+                            break
+
+                # Incomplete object - wait for more data
+                if end_idx == -1:
+                    buffer = buffer[start_idx:]
+                    break
+
+                # Extract and parse complete object
+                batch_json = buffer[start_idx:end_idx + 1]
+                buffer = buffer[end_idx + 1:]
+
+                try:
+                    batch = json.loads(batch_json)
                     applogger.debug(
                         consts.LOG_FORMAT.format(
                             consts.LOG_PREFIX,
                             "parse_stream",
                             "SecOpsAPI",
-                            f"Heartbeat received (total: {heartbeats_skipped})",
+                            f"Batch received: {batch}",
                         )
                     )
-                    #TODO: remove <--
+                    batches_found += 1
+
+                    # Skip heartbeat messages
+                    if isinstance(batch, dict) and batch.get("heartbeat"):
+                        heartbeats_skipped += 1
+                        applogger.debug(
+                            consts.LOG_FORMAT.format(
+                                consts.LOG_PREFIX,
+                                "parse_stream",
+                                "SecOpsAPI",
+                                f"Heartbeat received (total: {heartbeats_skipped})",
+                            )
+                        )
+                        continue
+
+                    yield batch
+
+                except json.JSONDecodeError as err:
+                    applogger.warning(
+                        consts.LOG_FORMAT.format(
+                            consts.LOG_PREFIX,
+                            "parse_stream",
+                            "SecOpsAPI",
+                            f"JSON parse error: {err.msg}",
+                        )
+                    )
                     continue
 
-                yield batch
+        # for line in response.iter_lines(decode_unicode=True, delimiter="\r\n"):
+        #     #TODO: remove
+        #     lines_received += 1
+        #     # Skip empty/whitespace lines
+        #     if not line or not line.strip():
+        #         continue
 
-            except json.JSONDecodeError as err:
-                applogger.warning(
-                    consts.LOG_FORMAT.format(
-                        consts.LOG_PREFIX,
-                        "parse_stream",
-                        "SecOpsAPI",
-                        f"JSON parse error: {err.msg}",
-                    )
-                )
-                continue
+        #     # total_bytes_read += len(line.encode("utf-8"))
+
+        #     # # Log progress every 1 MB
+        #     # if total_bytes_read > 0 and total_bytes_read % PROGRESS_LOG_THRESHOLD == 0:
+        #     #     applogger.info(
+        #     #         consts.LOG_FORMAT.format(
+        #     #             consts.LOG_PREFIX,
+        #     #             "parse_stream",
+        #     #             "SecOpsAPI",
+        #     #             f"Streaming... {total_bytes_read / (1024 * 1024):.1f}MB",
+        #     #         )
+        #     #     )
+
+        #     # Trim characters before first { and after last }
+        #     # This handles whitespace/malformed JSON around the object
+        #     # start_idx = line.find("{")
+        #     # end_idx = line.rfind("}")
+
+        #     # if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
+        #     #     #TODO: remove
+        #     #     applogger.debug(
+        #     #         consts.LOG_FORMAT.format(
+        #     #             consts.LOG_PREFIX,
+        #     #             "parse_stream",
+        #     #             "SecOpsAPI",
+        #     #             f"Line {lines_received}: No braces found (skipped)",
+        #     #         )
+        #     #     )
+        #     #     continue
+
+        #     # batch_json = line[start_idx : end_idx + 1]
+        #     batch_json = "{" + line.split("{", 1)[1].rsplit("}", 1)[0] + "}"
+
+        #     try:
+        #         batch = json.loads(batch_json)
+        #         applogger.debug(
+        #                 consts.LOG_FORMAT.format(
+        #                     consts.LOG_PREFIX,
+        #                     "parse_stream",
+        #                     "SecOpsAPI",
+        #                     f"batch received : {batch})",
+        #                 )
+        #             )
+        #         #TODO: remove
+        #         batches_found += 1
+
+        #         # Skip heartbeat messages
+        #         if isinstance(batch, dict) and batch.get("heartbeat"):
+        #             #TODO: remove -->
+        #             heartbeats_skipped += 1
+        #             applogger.debug(
+        #                 consts.LOG_FORMAT.format(
+        #                     consts.LOG_PREFIX,
+        #                     "parse_stream",
+        #                     "SecOpsAPI",
+        #                     f"Heartbeat received (total: {heartbeats_skipped})",
+        #                 )
+        #             )
+        #             #TODO: remove <--
+        #             continue
+
+        #         yield batch
+
+        #     except json.JSONDecodeError as err:
+        #         applogger.warning(
+        #             consts.LOG_FORMAT.format(
+        #                 consts.LOG_PREFIX,
+        #                 "parse_stream",
+        #                 "SecOpsAPI",
+        #                 f"JSON parse error: {err.msg}",
+        #             )
+        #         )
+        #         continue
 
     except httpx.TimeoutException as exc:
         error_msg = f"Stream read timeout: {exc}"
@@ -161,7 +243,7 @@ def parse_stream(response: "httpx.Response") -> Iterator[dict]:
                 consts.LOG_PREFIX,
                 "parse_stream",
                 "SecOpsAPI",
-                f"Stream complete: lines_received={lines_received}, batches_found={batches_found}, heartbeats_skipped={heartbeats_skipped}, total_bytes={total_bytes_read}",
+                f"Stream complete: batches_found={batches_found}, heartbeats_skipped={heartbeats_skipped}, total_bytes={total_bytes_read}",
             )
         )
 
