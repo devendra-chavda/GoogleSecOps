@@ -323,7 +323,7 @@ class SecOpsClient:
                 content=json.dumps(request_body),
                 timeout=consts.API_TIMEOUT_SECONDS,
             ) as response:
-                response.raise_for_status()
+                self._check_response_status(response, page_token, page_start)
 
                 try:
                     for line in response.iter_lines():
@@ -340,6 +340,9 @@ class SecOpsClient:
                         )
                     )
 
+        except SecOpsApiError:
+            # Already wrapped/logged by _check_response_status; don't re-wrap
+            raise
         except httpx.TimeoutException as exc:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
@@ -349,17 +352,6 @@ class SecOpsClient:
             )
             applogger.error(error_msg)
             raise SecOpsApiError(error_msg) from exc
-        except httpx.HTTPStatusError as exc:
-            error_msg = consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                "SecOpsClient",
-                f"HTTP error {exc.response.status_code}: {exc}",
-            )
-            applogger.error(error_msg)
-            raise SecOpsApiError(
-                error_msg, status_code=exc.response.status_code
-            ) from exc
         except httpx.RequestError as exc:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
@@ -452,7 +444,13 @@ class SecOpsClient:
         page_token: Optional[str],
         page_start: str,
     ) -> None:
-        """Check HTTP response status and raise on errors.
+        """Check HTTP response status and raise SecOpsApiError on errors.
+
+        Provides config-specific guidance for the common SecOps misconfigurations:
+          - 400: malformed request body or invalid parameter values
+          - 401: invalid/expired credentials or wrong instance ID
+          - 403: service account lacks permission, or wrong project ID
+          - 404: wrong region, project, or instance ID (endpoint not found)
 
         Args:
             response: HTTPX streaming response.
@@ -463,45 +461,61 @@ class SecOpsClient:
             SecOpsApiError: On HTTP error responses.
         """
         __method_name = inspect.currentframe().f_code.co_name
+        status = response.status_code
 
-        if response.status_code == 401:
-            error_msg = consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                "SecOpsClient",
-                "Unauthorized (401) - check service account credentials",
+        if status < 400:
+            return
+
+        # Streaming responses don't buffer the body; read it before .text works.
+        try:
+            response.read()
+            body_snippet = response.text[:500] if response.text else ""
+        except Exception:
+            body_snippet = ""
+
+        diagnostics = (
+            f"project_id={consts.SECOPS_PROJECT_ID}, "
+            f"region={consts.SECOPS_REGION}, "
+            f"instance_id={consts.SECOPS_INSTANCE_ID}, "
+            f"pageToken={'set' if page_token else 'not set'}, "
+            f"pageStart={page_start or 'not set'}"
+        )
+
+        if status == 400:
+            hint = (
+                "Bad Request (400) - malformed request body or invalid params. "
+                "Check pageStartTime format (ISO 8601 with 'Z') and batch sizes."
             )
-            applogger.error(error_msg)
-            raise SecOpsApiError(error_msg, status_code=401)
-
-        if response.status_code == 400:
-            try:
-                # Streaming responses must be read before .text is accessible
-                response.read()
-                error_details = response.text[:500]
-            except Exception:
-                error_details = "Could not read error details"
-
-            error_msg = consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                "SecOpsClient",
-                f"Bad Request (400): {error_details}. "
-                f"Params: batchSize={consts.DETECTION_BATCH_SIZE}, "
-                f"pageToken={'set' if page_token else 'not set'}",
+        elif status == 401:
+            hint = (
+                "Unauthorized (401) - invalid or expired credentials, or "
+                "incorrect SecOpsInstanceId. Verify the instance ID."
             )
-            applogger.error(error_msg)
-            raise SecOpsApiError(error_msg, status_code=400)
-
-        if response.status_code >= 400:
-            error_msg = consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                "SecOpsClient",
-                f"HTTP error {response.status_code}",
+        elif status == 403:
+            hint = (
+                "Forbidden (403) - service account lacks Chronicle API "
+                "permission, or incorrect SecOpsProjectId. Verify the project "
+                "ID and that the service account has the Chronicle API Viewer "
+                "(or equivalent) role."
             )
-            applogger.error(error_msg)
-            raise SecOpsApiError(error_msg, status_code=response.status_code)
+        elif status == 404:
+            hint = (
+                "Not Found (404) - endpoint does not exist. Verify "
+                "SecOpsRegion (e.g. 'us', 'europe', 'asia-southeast1') and "
+                "that the project/instance combination is valid for that region."
+            )
+        else:
+            hint = f"HTTP error {status}"
+
+        error_msg = consts.LOG_FORMAT.format(
+            consts.LOG_PREFIX,
+            __method_name,
+            "SecOpsClient",
+            f"{hint} | {diagnostics}"
+            + (f" | response_body={body_snippet}" if body_snippet else ""),
+        )
+        applogger.error(error_msg)
+        raise SecOpsApiError(error_msg, status_code=status)
 
     # ─── Internal: Retry Logic ─────────────────────────────────────────────────
 
