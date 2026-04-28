@@ -68,7 +68,7 @@ CHECKPOINT_FILE_NAME = os.environ.get("CheckpointFileName", "google_secops_check
 # Raw detection data (buffering between functions)
 FILE_SHARE_NAME_DATA = os.environ.get("FileShareNameData", "google-secops-data")
 FILE_NAME_PREFIX = "google_secops_raw"  # Files named: {PREFIX}_{epoch}_{index}
-
+MAX_CHUNK_SIZE = 1024 * 1024
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AZURE MONITOR INGESTION (SENTINEL DCR)

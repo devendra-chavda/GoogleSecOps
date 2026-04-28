@@ -131,6 +131,10 @@ class GoogleServiceAccountAuth:
             applogger.error(error_msg)
             raise SecOpsAuthError(error_msg) from exc
 
+    def get_credentials(self):
+        """Return the underlying service account credentials."""
+        return self._creds
+
     def _is_token_valid(self, now: float) -> bool:
         return (
             self._token

@@ -17,7 +17,8 @@ import time
 from typing import Iterator, Optional, Tuple
 import inspect
 
-import httpx
+import requests
+from google.auth.transport import requests as auth_requests
 
 from . import consts
 from .exceptions import SecOpsApiError, SecOpsConnectorError
@@ -28,207 +29,37 @@ from .logger import applogger
 # INTERNAL CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# HTTP timeout settings (in seconds)
-HTTP_CONNECT_TIMEOUT = 30.0
-HTTP_WRITE_TIMEOUT = 30.0
-HTTP_POOL_TIMEOUT = 30.0
-
 # Batch extraction: Progress logging threshold
 PROGRESS_LOG_THRESHOLD = 1024 * 1024  # Log every 1 MB
 
 
-def parse_stream(response: "httpx.Response") -> Iterator[dict]:
+def parse_stream(response: "requests.Response") -> Iterator[dict]:
     """Parse detection batches from SecOps API streaming response.
 
-    Based on XSOAR/Demisto implementation. Accumulates bytes from stream
-    and detects complete JSON objects by tracking brace depth.
-    The response is a continuous stream of JSON objects.
+    Reads the response line by line. Each line is a JSON object. Trims
+    all characters before the first opening brace and after the last closing
+    brace before parsing.
 
     Yields:
-        Parsed JSON batch dictionaries from the stream
+        Parsed JSON batch dicts from the stream (including heartbeats)
 
     Raises:
-        SecOpsApiError: On parse failure or stream read error
+        SecOpsApiError: On stream read error
     """
-    total_bytes_read = 0
-    #TODO: remove
     lines_received = 0
     batches_found = 0
-    heartbeats_skipped = 0
-    #TODO: remove
 
     try:
-        for chunk in response.iter_bytes(chunk_size=8192, decode_unicode=True):
-            buffer += chunk
-            total_bytes_read += len(chunk.encode("utf-8"))
+        for line in response.iter_lines(decode_unicode=True, delimiter="\r\n"):
+            if not line:
+                continue
+            lines_received += 1
+            # Trim all characters before first opening brace, and after last closing brace
+            # Example: "  {'key1': 'value1'},  " -> "{'key1': 'value1'}"
+            json_string = "{" + line.split("{", 1)[1].rsplit("}", 1)[0] + "}"
+            batches_found += 1
+            yield json.loads(json_string)
 
-            # Log progress every 1 MB
-            if total_bytes_read > 0 and total_bytes_read % PROGRESS_LOG_THRESHOLD == 0:
-                applogger.info(
-                    consts.LOG_FORMAT.format(
-                        consts.LOG_PREFIX,
-                        "parse_stream",
-                        "SecOpsAPI",
-                        f"Streaming... {total_bytes_read / (1024 * 1024):.1f}MB",
-                    )
-                )
-
-            # Extract complete JSON objects from buffer by tracking brace depth
-            while buffer:
-                # Skip whitespace and find first opening brace
-                start_idx = buffer.find("{")
-                if start_idx == -1:
-                    buffer = buffer[buffer.rfind("}") + 1:] if buffer.rfind("}") != -1 else ""
-                    break
-
-                # Track brace depth to find matching closing brace
-                brace_depth = 0
-                end_idx = -1
-                for i in range(start_idx, len(buffer)):
-                    if buffer[i] == "{":
-                        brace_depth += 1
-                    elif buffer[i] == "}":
-                        brace_depth -= 1
-                        if brace_depth == 0:
-                            end_idx = i
-                            break
-
-                # Incomplete object - wait for more data
-                if end_idx == -1:
-                    buffer = buffer[start_idx:]
-                    break
-
-                # Extract and parse complete object
-                batch_json = buffer[start_idx:end_idx + 1]
-                buffer = buffer[end_idx + 1:]
-
-                try:
-                    batch = json.loads(batch_json)
-                    applogger.debug(
-                        consts.LOG_FORMAT.format(
-                            consts.LOG_PREFIX,
-                            "parse_stream",
-                            "SecOpsAPI",
-                            f"Batch received: {batch}",
-                        )
-                    )
-                    batches_found += 1
-
-                    # Skip heartbeat messages
-                    if isinstance(batch, dict) and batch.get("heartbeat"):
-                        heartbeats_skipped += 1
-                        applogger.debug(
-                            consts.LOG_FORMAT.format(
-                                consts.LOG_PREFIX,
-                                "parse_stream",
-                                "SecOpsAPI",
-                                f"Heartbeat received (total: {heartbeats_skipped})",
-                            )
-                        )
-                        continue
-
-                    yield batch
-
-                except json.JSONDecodeError as err:
-                    applogger.warning(
-                        consts.LOG_FORMAT.format(
-                            consts.LOG_PREFIX,
-                            "parse_stream",
-                            "SecOpsAPI",
-                            f"JSON parse error: {err.msg}",
-                        )
-                    )
-                    continue
-
-        # for line in response.iter_lines(decode_unicode=True, delimiter="\r\n"):
-        #     #TODO: remove
-        #     lines_received += 1
-        #     # Skip empty/whitespace lines
-        #     if not line or not line.strip():
-        #         continue
-
-        #     # total_bytes_read += len(line.encode("utf-8"))
-
-        #     # # Log progress every 1 MB
-        #     # if total_bytes_read > 0 and total_bytes_read % PROGRESS_LOG_THRESHOLD == 0:
-        #     #     applogger.info(
-        #     #         consts.LOG_FORMAT.format(
-        #     #             consts.LOG_PREFIX,
-        #     #             "parse_stream",
-        #     #             "SecOpsAPI",
-        #     #             f"Streaming... {total_bytes_read / (1024 * 1024):.1f}MB",
-        #     #         )
-        #     #     )
-
-        #     # Trim characters before first { and after last }
-        #     # This handles whitespace/malformed JSON around the object
-        #     # start_idx = line.find("{")
-        #     # end_idx = line.rfind("}")
-
-        #     # if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
-        #     #     #TODO: remove
-        #     #     applogger.debug(
-        #     #         consts.LOG_FORMAT.format(
-        #     #             consts.LOG_PREFIX,
-        #     #             "parse_stream",
-        #     #             "SecOpsAPI",
-        #     #             f"Line {lines_received}: No braces found (skipped)",
-        #     #         )
-        #     #     )
-        #     #     continue
-
-        #     # batch_json = line[start_idx : end_idx + 1]
-        #     batch_json = "{" + line.split("{", 1)[1].rsplit("}", 1)[0] + "}"
-
-        #     try:
-        #         batch = json.loads(batch_json)
-        #         applogger.debug(
-        #                 consts.LOG_FORMAT.format(
-        #                     consts.LOG_PREFIX,
-        #                     "parse_stream",
-        #                     "SecOpsAPI",
-        #                     f"batch received : {batch})",
-        #                 )
-        #             )
-        #         #TODO: remove
-        #         batches_found += 1
-
-        #         # Skip heartbeat messages
-        #         if isinstance(batch, dict) and batch.get("heartbeat"):
-        #             #TODO: remove -->
-        #             heartbeats_skipped += 1
-        #             applogger.debug(
-        #                 consts.LOG_FORMAT.format(
-        #                     consts.LOG_PREFIX,
-        #                     "parse_stream",
-        #                     "SecOpsAPI",
-        #                     f"Heartbeat received (total: {heartbeats_skipped})",
-        #                 )
-        #             )
-        #             #TODO: remove <--
-        #             continue
-
-        #         yield batch
-
-        #     except json.JSONDecodeError as err:
-        #         applogger.warning(
-        #             consts.LOG_FORMAT.format(
-        #                 consts.LOG_PREFIX,
-        #                 "parse_stream",
-        #                 "SecOpsAPI",
-        #                 f"JSON parse error: {err.msg}",
-        #             )
-        #         )
-        #         continue
-
-    except httpx.TimeoutException as exc:
-        error_msg = f"Stream read timeout: {exc}"
-        applogger.error(
-            consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX, "parse_stream", "SecOpsAPI", error_msg
-            )
-        )
-        raise SecOpsApiError(error_msg) from exc
     except Exception as exc:
         error_msg = f"Stream read error: {exc}"
         applogger.error(
@@ -243,7 +74,7 @@ def parse_stream(response: "httpx.Response") -> Iterator[dict]:
                 consts.LOG_PREFIX,
                 "parse_stream",
                 "SecOpsAPI",
-                f"Stream complete: batches_found={batches_found}, heartbeats_skipped={heartbeats_skipped}, total_bytes={total_bytes_read}",
+                f"Stream complete: lines_received={lines_received}, batches_found={batches_found}",
             )
         )
 
@@ -291,6 +122,7 @@ class SecOpsClient:
 
         self._auth = auth
         self._endpoint = self._build_endpoint(project_id, region, instance_id)
+        self.http_client = auth_requests.AuthorizedSession(auth.get_credentials())
 
         applogger.debug(
             consts.LOG_FORMAT.format(
@@ -468,20 +300,6 @@ class SecOpsClient:
         # Build request body
         request_body = self._build_request_body(page_start, page_token)
 
-        # Build headers with authentication
-        headers = {
-            "Authorization": f"Bearer {self._auth.get_access_token()}",
-            "Content-Type": "application/json",
-        }
-
-        # Build timeout configuration
-        timeout = httpx.Timeout(
-            connect=HTTP_CONNECT_TIMEOUT,
-            read=float(consts.API_TIMEOUT_SECONDS),
-            write=HTTP_WRITE_TIMEOUT,
-            pool=HTTP_POOL_TIMEOUT,
-        )
-
         applogger.debug(
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
@@ -492,25 +310,59 @@ class SecOpsClient:
         )
 
         try:
-            # Use streaming to avoid buffering entire response in memory
-            with httpx.Client(timeout=timeout) as client:
-                with client.stream(
-                    "POST", self._endpoint, headers=headers, json=request_body
-                ) as response:
-                    # Handle HTTP errors
-                    self._check_response_status(response, page_token, page_start)
+            response = self.http_client.post(
+                self._endpoint,
+                json=request_body,
+                stream=True,
+                timeout=float(consts.API_TIMEOUT_SECONDS),
+            )
 
-                    # Extract first JSON batch from streaming response
-                    try:
-                        for batch in parse_stream(response):
-                            return batch
-                        raise SecOpsApiError("No batches received")
-                    except SecOpsApiError:
-                        raise
-                    except Exception as exc:
-                        raise SecOpsApiError(f"Error reading batch: {exc}") from exc
+            applogger.info(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    "SecOpsClient",
+                    f"Response received with status {response.status_code}, now parsing stream",
+                )
+            )
 
-        except httpx.RequestError as exc:
+            self._check_response_status(response, page_token, page_start)
+
+            for batch in parse_stream(response):
+                if not isinstance(batch, dict):
+                    continue
+                if batch.get("heartbeat"):
+                    applogger.debug(
+                        consts.LOG_FORMAT.format(
+                            consts.LOG_PREFIX,
+                            __method_name,
+                            "SecOpsClient",
+                            "Heartbeat received (connection active)",
+                        )
+                    )
+                    continue
+                applogger.info(
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        __method_name,
+                        "SecOpsClient",
+                        f"Batch received with {len(batch.get('detections', []))} detections",
+                    )
+                )
+                return batch
+
+            return {}
+
+        except requests.exceptions.Timeout as exc:
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "SecOpsClient",
+                f"Request timed out after {consts.API_TIMEOUT_SECONDS}s: {exc}",
+            )
+            applogger.error(error_msg)
+            raise SecOpsApiError(error_msg) from exc
+        except requests.exceptions.RequestException as exc:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
@@ -555,7 +407,7 @@ class SecOpsClient:
 
     @staticmethod
     def _check_response_status(
-        response: httpx.Response,
+        response: "requests.Response",
         page_token: Optional[str],
         page_start: str,
     ) -> None:
@@ -630,7 +482,7 @@ class SecOpsClient:
         if isinstance(exc, SecOpsApiError):
             return exc.status_code in consts.RETRYABLE_STATUS_CODES
 
-        return isinstance(exc, (httpx.TimeoutException, httpx.RequestError))
+        return isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.RequestException))
 
     @staticmethod
     def _sleep_with_backoff(attempt: int) -> None:
