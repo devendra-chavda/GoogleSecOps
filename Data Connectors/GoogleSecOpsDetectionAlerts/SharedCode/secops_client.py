@@ -58,25 +58,25 @@ def parse_stream(response: "httpx.Response") -> Iterator[dict]:
     #TODO: remove
 
     try:
-        for line in response.iter_lines():
+        for line in response.iter_lines(decode_unicode=True, delimiter="\r\n"):
             #TODO: remove
             lines_received += 1
             # Skip empty/whitespace lines
             if not line or not line.strip():
                 continue
 
-            total_bytes_read += len(line.encode("utf-8"))
+            # total_bytes_read += len(line.encode("utf-8"))
 
-            # Log progress every 1 MB
-            if total_bytes_read > 0 and total_bytes_read % PROGRESS_LOG_THRESHOLD == 0:
-                applogger.info(
-                    consts.LOG_FORMAT.format(
-                        consts.LOG_PREFIX,
-                        "parse_stream",
-                        "SecOpsAPI",
-                        f"Streaming... {total_bytes_read / (1024 * 1024):.1f}MB",
-                    )
-                )
+            # # Log progress every 1 MB
+            # if total_bytes_read > 0 and total_bytes_read % PROGRESS_LOG_THRESHOLD == 0:
+            #     applogger.info(
+            #         consts.LOG_FORMAT.format(
+            #             consts.LOG_PREFIX,
+            #             "parse_stream",
+            #             "SecOpsAPI",
+            #             f"Streaming... {total_bytes_read / (1024 * 1024):.1f}MB",
+            #         )
+            #     )
 
             # Trim characters before first { and after last }
             # This handles whitespace/malformed JSON around the object
@@ -100,6 +100,14 @@ def parse_stream(response: "httpx.Response") -> Iterator[dict]:
 
             try:
                 batch = json.loads(batch_json)
+                applogger.debug(
+                        consts.LOG_FORMAT.format(
+                            consts.LOG_PREFIX,
+                            "parse_stream",
+                            "SecOpsAPI",
+                            f"batch received : {batch})",
+                        )
+                    )
                 #TODO: remove
                 batches_found += 1
 
