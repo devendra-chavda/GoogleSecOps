@@ -58,6 +58,14 @@ def parse_stream(response: "requests.Response") -> Iterator[dict]:
             # Example: "  {'key1': 'value1'},  " -> "{'key1': 'value1'}"
             json_string = "{" + line.split("{", 1)[1].rsplit("}", 1)[0] + "}"
             batches_found += 1
+            applogger.debug(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    "parse_stream",
+                    "SecOpsAPI",
+                    f"Data arrived: batch={batches_found}, size={len(line)} bytes",
+                )
+            )
             yield json.loads(json_string)
 
     except Exception as exc:
