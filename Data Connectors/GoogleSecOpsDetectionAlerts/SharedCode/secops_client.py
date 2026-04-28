@@ -314,7 +314,6 @@ class SecOpsClient:
                 self._endpoint,
                 json=request_body,
                 stream=True,
-                timeout=float(consts.API_TIMEOUT_SECONDS),
             )
 
             applogger.info(
