@@ -1,80 +1,82 @@
 """Client for Google SecOps Detection Alerts API.
 
-This module provides a client for polling Google SecOps for
-detection alerts. The API sends a never-ending JSON stream of detection batches.
+Polls Google SecOps for detection alerts. The API responds with a streaming
+JSON array of detection batches that may stay open for extended periods.
 
 Key Concepts:
-  - Stream Format: Array of JSON objects: [{batch1}, {batch2}, ...]
-  - Streaming: Responses are never-closing streams to reduce buffering
-  - Pagination: Uses pageToken for mid-window and pageStartTime for new windows
+  - Stream Format: JSON array of objects: [{batch1}, {batch2}, ...]
+  - Streaming: Responses stream line-by-line to reduce buffering
+  - Pagination: pageToken continues mid-window, pageStartTime starts new window
   - Heartbeats: Server sends heartbeat messages to keep connection alive
-  - Timeouts: Per-message timeout detects connection stalls (Demisto approach)
 """
 
+import inspect
 import json
 import random
 import time
 from typing import Iterator, Optional, Tuple
-import inspect
 
-import requests
-from google.auth.transport import requests as auth_requests
+import httpx
+import google.auth.transport.requests
 
 from . import consts
 from .exceptions import SecOpsApiError, SecOpsConnectorError
 from .google_auth import GoogleServiceAccountAuth
 from .logger import applogger
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# INTERNAL CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════════════
 
-# Batch extraction: Progress logging threshold
-PROGRESS_LOG_THRESHOLD = 1024 * 1024  # Log every 1 MB
+class GoogleAuthTransport(httpx.BaseTransport):
+    """HTTPX transport that signs each request with Google service account credentials."""
+
+    def __init__(self, credentials, transport: Optional[httpx.BaseTransport] = None):
+        self._transport = transport or httpx.HTTPTransport()
+        self._auth_request = google.auth.transport.requests.Request()
+        self._credentials = credentials
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        """Attach Google auth headers and forward the request."""
+        self._credentials.before_request(
+            self._auth_request,
+            request.method,
+            str(request.url),
+            request.headers,
+        )
+        return self._transport.handle_request(request)
 
 
-def parse_stream(response: "requests.Response") -> Iterator[dict]:
-    """Parse detection batches from SecOps API streaming response.
+def parse_stream(response: httpx.Response) -> Iterator[dict]:
+    """Parse detection batches from a SecOps streaming response.
 
-    Reads the response line by line. Each line is a JSON object. Trims
-    all characters before the first opening brace and after the last closing
-    brace before parsing.
+    Accumulates all lines from the stream into a single buffer, then
+    parses the resulting JSON array and yields each batch.
 
     Yields:
-        Parsed JSON batch dicts from the stream (including heartbeats)
+        Parsed JSON batch dicts (including heartbeats).
 
     Raises:
-        SecOpsApiError: On stream read error
+        SecOpsApiError: On stream read or JSON decode failure.
     """
+    response.raise_for_status()
+
+    # Parse stream (same as secops_client.parse_stream)
     lines_received = 0
     batches_found = 0
-    applogger.debug(
-        consts.LOG_FORMAT.format(
-            consts.LOG_PREFIX,
-            "parse_stream",
-            "SecOpsAPI",
-            "test",
-        )
-    )
+    batch = ""
 
     try:
-        for line in response.iter_lines(decode_unicode=True, delimiter="\r\n"):
+        for line in response.iter_lines():
             if not line:
                 continue
             lines_received += 1
-            # Trim all characters before first opening brace, and after last closing brace
-            # Example: "  {'key1': 'value1'},  " -> "{'key1': 'value1'}"
-            json_string = "{" + line.split("{", 1)[1].rsplit("}", 1)[0] + "}"
+
             batches_found += 1
-            applogger.debug(
-                consts.LOG_FORMAT.format(
-                    consts.LOG_PREFIX,
-                    "parse_stream",
-                    "SecOpsAPI",
-                    f"Data arrived: batch={batches_found}, size={len(line)} bytes",
-                )
-            )
-            yield json.loads(json_string)
+            batch += line
+
+        if not batch:
+            return
+
+        for item in json.loads(batch):
+            yield item
 
     except Exception as exc:
         error_msg = f"Stream read error: {exc}"
@@ -99,11 +101,10 @@ class SecOpsClient:
     """Client for polling Google SecOps Detection Alerts API.
 
     Handles:
-    - Authentication via Google service account
-    - Streaming HTTP connections
-    - JSON stream parsing with brace-depth tracking
-    - Automatic retry with exponential backoff
-    - Per-message timeout detection
+      - Authentication via Google service account (HTTPX transport)
+      - Streaming HTTP connections
+      - Line-by-line JSON stream parsing
+      - Automatic retry with exponential backoff
     """
 
     def __init__(
@@ -116,13 +117,13 @@ class SecOpsClient:
         """Initialize SecOps client.
 
         Args:
-            auth: GoogleServiceAccountAuth instance for API authentication
-            project_id: SecOps project ID
-            region: SecOps region (us, europe, asia-southeast1)
-            instance_id: SecOps instance ID
+            auth: GoogleServiceAccountAuth instance for API authentication.
+            project_id: SecOps project ID.
+            region: SecOps region (us, europe, asia-southeast1).
+            instance_id: SecOps instance ID.
 
         Raises:
-            ValueError: If any required configuration is missing
+            ValueError: If any required configuration is missing.
         """
         __method_name = inspect.currentframe().f_code.co_name
 
@@ -131,14 +132,17 @@ class SecOpsClient:
                 consts.LOG_PREFIX,
                 __method_name,
                 "SecOpsClient",
-                f"Missing SecOps config: project_id={project_id}, region={region}, instance_id={instance_id}",
+                f"Missing SecOps config: project_id={project_id}, "
+                f"region={region}, instance_id={instance_id}",
             )
             applogger.error(error_msg)
             raise ValueError(error_msg)
 
         self._auth = auth
         self._endpoint = self._build_endpoint(project_id, region, instance_id)
-        self.http_client = auth_requests.AuthorizedSession(auth.get_credentials())
+
+        transport = GoogleAuthTransport(credentials=auth.get_credentials())
+        self.http_client = httpx.Client(transport=transport)
 
         applogger.debug(
             consts.LOG_FORMAT.format(
@@ -158,9 +162,7 @@ class SecOpsClient:
             f"instances/{instance_id}/legacy:legacyStreamDetectionAlerts"
         )
 
-    # ═══════════════════════════════════════════════════════════════════════════════
-    # PUBLIC API
-    # ═══════════════════════════════════════════════════════════════════════════════
+    # ─── Public API ────────────────────────────────────────────────────────────
 
     def poll_detection_batches(
         self,
@@ -170,23 +172,20 @@ class SecOpsClient:
     ) -> Iterator[Tuple[dict, Optional[str], Optional[str]]]:
         """Poll SecOps API for detection batches.
 
-        Yields detection batches from the SecOps API with automatic retry on
-        transient failures. Returns when: (1) time budget exhausted, or
-        (2) pagination window complete (nextPageStartTime received).
+        Yields detection batches with automatic retry on transient failures.
+        Returns when the time budget is exhausted or the pagination window
+        is complete (nextPageStartTime received).
 
         Args:
-            page_start_time: Start of time window to fetch (ISO timestamp)
-            page_token: Pagination token from previous call (continues mid-window)
-            deadline_epoch: Unix timestamp when to stop polling
+            page_start_time: Start of time window to fetch (ISO timestamp).
+            page_token: Pagination token from previous call (continues mid-window).
+            deadline_epoch: Unix timestamp at which to stop polling.
 
         Yields:
-            Tuple of (batch_dict, next_token, next_start_time) where:
-              - batch_dict: Detection batch from API
-              - next_token: Pagination token if mid-window (for continuation)
-              - next_start_time: New start time if window complete (for next window)
+            Tuple of (batch_dict, next_token, next_start_time).
 
         Raises:
-            SecOpsConnectorError: If too many consecutive API failures
+            SecOpsConnectorError: If too many consecutive API failures occur.
         """
         __method_name = inspect.currentframe().f_code.co_name
         current_token = page_token
@@ -203,7 +202,6 @@ class SecOpsClient:
         )
 
         while True:
-            # Give up after too many failures
             if consecutive_failures > consts.MAX_CONSECUTIVE_FAILURES:
                 error_msg = consts.LOG_FORMAT.format(
                     consts.LOG_PREFIX,
@@ -214,42 +212,37 @@ class SecOpsClient:
                 applogger.error(error_msg)
                 raise SecOpsConnectorError(error_msg)
 
-            # Exponential backoff on retry
             if consecutive_failures > 0:
                 self._sleep_with_backoff(consecutive_failures)
 
-            # Make API call
             try:
                 batch = self._make_api_call(
                     current_start, current_token, deadline_epoch
                 )
             except Exception as exc:
-                # Check if error is retryable (transient vs permanent)
                 if not self._should_retry(exc):
-                    raise  # Permanent error - fail fast
+                    raise
 
-                # Transient error - retry
                 consecutive_failures += 1
                 applogger.warning(
                     consts.LOG_FORMAT.format(
                         consts.LOG_PREFIX,
                         __method_name,
                         "SecOpsClient",
-                        f"API call failed, retrying (attempt {consecutive_failures}/{consts.MAX_CONSECUTIVE_FAILURES}): {str(exc)[:100]}",
+                        f"API call failed, retrying "
+                        f"(attempt {consecutive_failures}/{consts.MAX_CONSECUTIVE_FAILURES}): "
+                        f"{str(exc)[:100]}",
                     )
                 )
                 continue
 
-            # Success: reset failure counter
             consecutive_failures = 0
 
-            # Parse pagination tokens from response
             next_token = batch.get("nextPageToken")
             next_start = batch.get("nextPageStartTime")
 
             yield batch, next_token, next_start
 
-            # Stop conditions
             if next_start:
                 applogger.info(
                     consts.LOG_FORMAT.format(
@@ -272,13 +265,10 @@ class SecOpsClient:
                 )
                 return
 
-            # Update pagination state for next iteration
             current_token = next_token or current_token
             current_start = next_start or current_start
 
-    # ═══════════════════════════════════════════════════════════════════════════════
-    # INTERNAL: API COMMUNICATION
-    # ═══════════════════════════════════════════════════════════════════════════════
+    # ─── Internal: API Communication ───────────────────────────────────────────
 
     def _make_api_call(
         self,
@@ -286,23 +276,22 @@ class SecOpsClient:
         page_token: Optional[str],
         deadline: Optional[float],
     ) -> dict:
-        """Make single streaming HTTP request to SecOps API.
+        """Make a single streaming HTTP request to the SecOps API.
 
         Args:
-            page_start: Window start time
-            page_token: Pagination token (if continuing mid-window)
-            deadline: Function timeout deadline (raises error if exceeded)
+            page_start: Window start time.
+            page_token: Pagination token (if continuing mid-window).
+            deadline: Function timeout deadline.
 
         Returns:
-            Parsed JSON batch dict
+            Parsed JSON batch dict.
 
         Raises:
-            SecOpsApiError: On HTTP errors or stream read failures
-            SecOpsConnectorError: If deadline exceeded
+            SecOpsApiError: On HTTP errors or stream read failures.
+            SecOpsConnectorError: If deadline exceeded.
         """
         __method_name = inspect.currentframe().f_code.co_name
 
-        # Check deadline before making request
         if deadline and time.time() >= deadline:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
@@ -313,7 +302,6 @@ class SecOpsClient:
             applogger.error(error_msg)
             raise SecOpsConnectorError(error_msg)
 
-        # Build request body
         request_body = self._build_request_body(page_start, page_token)
 
         applogger.debug(
@@ -321,54 +309,38 @@ class SecOpsClient:
                 consts.LOG_PREFIX,
                 __method_name,
                 "SecOpsClient",
-                f"API call (batch={consts.DETECTION_BATCH_SIZE}, max={consts.MAX_DETECTIONS}, timeout={consts.API_TIMEOUT_SECONDS}s)",
+                f"API call (batch={consts.DETECTION_BATCH_SIZE}, "
+                f"max={consts.MAX_DETECTIONS}, "
+                f"timeout={consts.API_TIMEOUT_SECONDS}s)",
             )
         )
 
+        buffer = ""
         try:
-            response = self.http_client.post(
-                self._endpoint,
-                json=request_body,
-                stream=True,
-            )
+            with self.http_client.stream(
+                "POST",
+                url=self._endpoint,
+                content=json.dumps(request_body),
+                timeout=consts.API_TIMEOUT_SECONDS,
+            ) as response:
+                response.raise_for_status()
 
-            applogger.info(
-                consts.LOG_FORMAT.format(
-                    consts.LOG_PREFIX,
-                    __method_name,
-                    "SecOpsClient",
-                    f"Response received with status {response.status_code}, now parsing stream",
-                )
-            )
-
-            self._check_response_status(response, page_token, page_start)
-
-            for batch in parse_stream(response):
-                if not isinstance(batch, dict):
-                    continue
-                if batch.get("heartbeat"):
-                    applogger.debug(
+                try:
+                    for line in response.iter_lines():
+                        if not line:
+                            continue
+                        buffer += line
+                finally:
+                    applogger.info(
                         consts.LOG_FORMAT.format(
                             consts.LOG_PREFIX,
                             __method_name,
                             "SecOpsClient",
-                            "Heartbeat received (connection active)",
+                            f"Stream complete: bytes_received={len(buffer)}",
                         )
                     )
-                    continue
-                applogger.info(
-                    consts.LOG_FORMAT.format(
-                        consts.LOG_PREFIX,
-                        __method_name,
-                        "SecOpsClient",
-                        f"Batch received with {len(batch.get('detections', []))} detections",
-                    )
-                )
-                return batch
 
-            return {}
-
-        except requests.exceptions.Timeout as exc:
+        except httpx.TimeoutException as exc:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
@@ -377,7 +349,18 @@ class SecOpsClient:
             )
             applogger.error(error_msg)
             raise SecOpsApiError(error_msg) from exc
-        except requests.exceptions.RequestException as exc:
+        except httpx.HTTPStatusError as exc:
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "SecOpsClient",
+                f"HTTP error {exc.response.status_code}: {exc}",
+            )
+            applogger.error(error_msg)
+            raise SecOpsApiError(
+                error_msg, status_code=exc.response.status_code
+            ) from exc
+        except httpx.RequestError as exc:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
@@ -396,23 +379,66 @@ class SecOpsClient:
             applogger.error(error_msg)
             raise SecOpsApiError(error_msg) from exc
 
+        if not buffer:
+            return {}
+
+        try:
+            parsed = json.loads(buffer)
+        except json.JSONDecodeError as exc:
+            error_msg = consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "SecOpsClient",
+                f"Failed to parse stream JSON: {exc}",
+            )
+            applogger.error(error_msg)
+            raise SecOpsApiError(error_msg) from exc
+
+        # Stream is a JSON array; pick the first batch with real data,
+        # logging and skipping heartbeats along the way.
+        if isinstance(parsed, dict):
+            return parsed
+
+        if not isinstance(parsed, list):
+            return {}
+
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            if item.get("heartbeat"):
+                applogger.debug(
+                    consts.LOG_FORMAT.format(
+                        consts.LOG_PREFIX,
+                        __method_name,
+                        "SecOpsClient",
+                        "Heartbeat received (connection active)",
+                    )
+                )
+                continue
+            applogger.info(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    "SecOpsClient",
+                    f"Batch received with "
+                    f"{len(item.get('detections', []))} detections",
+                )
+            )
+            return item
+
+        return {}
+
     @staticmethod
     def _build_request_body(page_start: str, page_token: Optional[str]) -> dict:
         """Build SecOps API request body.
 
-        Args:
-            page_start: Time window start (used if no token)
-            page_token: Pagination token (used if continuing mid-window)
-
-        Returns:
-            Request body dict
+        Picks pageToken when continuing mid-window, otherwise pageStartTime.
         """
         body = {
             "detectionBatchSize": consts.DETECTION_BATCH_SIZE,
             "maxDetections": consts.MAX_DETECTIONS,
         }
 
-        # Choose pagination method: token (mid-window) or start time (new window)
         if page_token:
             body["pageToken"] = page_token
         else:
@@ -422,19 +448,19 @@ class SecOpsClient:
 
     @staticmethod
     def _check_response_status(
-        response: "requests.Response",
+        response: httpx.Response,
         page_token: Optional[str],
         page_start: str,
     ) -> None:
-        """Check HTTP response status and raise errors if needed.
+        """Check HTTP response status and raise on errors.
 
         Args:
-            response: HTTP response from API
-            page_token: Request's pagination token
-            page_start: Request's start time
+            response: HTTPX streaming response.
+            page_token: Request's pagination token (for diagnostics).
+            page_start: Request's start time (for diagnostics).
 
         Raises:
-            SecOpsApiError: On HTTP error responses
+            SecOpsApiError: On HTTP error responses.
         """
         __method_name = inspect.currentframe().f_code.co_name
 
@@ -450,6 +476,8 @@ class SecOpsClient:
 
         if response.status_code == 400:
             try:
+                # Streaming responses must be read before .text is accessible
+                response.read()
                 error_details = response.text[:500]
             except Exception:
                 error_details = "Could not read error details"
@@ -458,7 +486,9 @@ class SecOpsClient:
                 consts.LOG_PREFIX,
                 __method_name,
                 "SecOpsClient",
-                f"Bad Request (400): {error_details}. Params: batchSize={consts.DETECTION_BATCH_SIZE}, pageToken={'set' if page_token else 'not set'}",
+                f"Bad Request (400): {error_details}. "
+                f"Params: batchSize={consts.DETECTION_BATCH_SIZE}, "
+                f"pageToken={'set' if page_token else 'not set'}",
             )
             applogger.error(error_msg)
             raise SecOpsApiError(error_msg, status_code=400)
@@ -473,41 +503,26 @@ class SecOpsClient:
             applogger.error(error_msg)
             raise SecOpsApiError(error_msg, status_code=response.status_code)
 
-    # INTERNAL: RETRY LOGIC
-    # ═══════════════════════════════════════════════════════════════════════════════
+    # ─── Internal: Retry Logic ─────────────────────────────────────────────────
 
     @staticmethod
     def _should_retry(exc: Exception) -> bool:
-        """Determine if exception is retryable (transient) or permanent.
+        """Return True if the exception is transient and worth retrying.
 
-        Retryable errors:
-        - HTTP 429 (rate limit), 500, 502, 503, 504 (server errors)
-        - Network timeouts and connection errors
-
-        Not retryable:
-        - HTTP 400 (bad request), 401 (unauthorized)
-        - JSON parse errors
-
-        Args:
-            exc: Exception to evaluate
-
-        Returns:
-            True if error is transient and should trigger retry
+        Retryable: HTTP 429/5xx, network timeouts, transport errors.
+        Not retryable: HTTP 400/401, JSON parse errors.
         """
         if isinstance(exc, SecOpsApiError):
             return exc.status_code in consts.RETRYABLE_STATUS_CODES
 
-        return isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.RequestException))
+        # httpx.TimeoutException is a subclass of RequestError, so this covers both
+        return isinstance(exc, httpx.RequestError)
 
     @staticmethod
     def _sleep_with_backoff(attempt: int) -> None:
-        """Sleep with exponential backoff before retrying.
+        """Sleep with exponential backoff plus jitter before retrying.
 
-        Formula: delay = base * 2^attempt + random(0, 1)
-        This prevents thundering herd when multiple retries happen
-
-        Args:
-            attempt: Attempt number (1, 2, 3, ...)
+        delay = base * 2^attempt + random(0, 1)
         """
         __method_name = inspect.currentframe().f_code.co_name
         delay = consts.RETRY_BASE_DELAY_SECONDS * (2**attempt) + random.uniform(0, 1.0)
