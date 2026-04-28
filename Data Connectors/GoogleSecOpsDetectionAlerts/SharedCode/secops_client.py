@@ -48,6 +48,14 @@ def parse_stream(response: "requests.Response") -> Iterator[dict]:
     """
     lines_received = 0
     batches_found = 0
+    applogger.debug(
+        consts.LOG_FORMAT.format(
+            consts.LOG_PREFIX,
+            "parse_stream",
+            "SecOpsAPI",
+            "test",
+        )
+    )
 
     try:
         for line in response.iter_lines(decode_unicode=True, delimiter="\r\n"):
