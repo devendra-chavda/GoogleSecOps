@@ -9,7 +9,7 @@ from google.auth.transport.requests import Request
 import json
 
 from . import consts
-from .exceptions import SecOpsAuthError
+from .exceptions import GoogleSecOpsAuthError
 from .logger import applogger
 
 
@@ -29,10 +29,10 @@ class GoogleServiceAccountAuth:
                 consts.LOG_PREFIX,
                 __method_name,
                 "GoogleServiceAccountAuth",
-                "SecOpsServiceAccountJson not configured",
+                "GoogleSecopsServiceAccountJson not configured",
             )
             applogger.error(error_msg)
-            raise SecOpsAuthError(error_msg)
+            raise GoogleSecOpsAuthError(error_msg)
 
         try:
             sa_dict = json.loads(service_account_json)
@@ -49,10 +49,10 @@ class GoogleServiceAccountAuth:
                 consts.LOG_PREFIX,
                 __method_name,
                 "GoogleServiceAccountAuth",
-                f"SecOpsServiceAccountJson invalid JSON: {exc}",
+                f"GoogleSecopsServiceAccountJson invalid JSON: {exc}",
             )
             applogger.error(error_msg)
-            raise SecOpsAuthError(error_msg) from exc
+            raise GoogleSecOpsAuthError(error_msg) from exc
 
         missing = [k for k in ("client_email", "private_key") if not sa_dict.get(k)]
         if missing:
@@ -63,7 +63,7 @@ class GoogleServiceAccountAuth:
                 f"Missing required fields in service account: {missing}",
             )
             applogger.error(error_msg)
-            raise SecOpsAuthError(error_msg)
+            raise GoogleSecOpsAuthError(error_msg)
 
         try:
             self._creds = service_account.Credentials.from_service_account_info(
@@ -85,7 +85,7 @@ class GoogleServiceAccountAuth:
                 f"Failed to create credentials: {exc}",
             )
             applogger.error(error_msg)
-            raise SecOpsAuthError(error_msg) from exc
+            raise GoogleSecOpsAuthError(error_msg) from exc
 
     def get_credentials(self):
         """Return the underlying service account credentials."""

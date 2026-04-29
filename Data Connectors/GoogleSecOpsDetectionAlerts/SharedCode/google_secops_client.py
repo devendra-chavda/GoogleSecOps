@@ -20,7 +20,7 @@ import httpx
 import google.auth.transport.requests
 
 from . import consts
-from .exceptions import SecOpsApiError, SecOpsConnectorError
+from .exceptions import GoogleSecOpsApiError, GoogleSecOpsConnectorError
 from .google_auth import GoogleServiceAccountAuth
 from .logger import applogger
 
@@ -54,11 +54,11 @@ def parse_stream(response: httpx.Response) -> Iterator[dict]:
         Parsed JSON batch dicts (including heartbeats).
 
     Raises:
-        SecOpsApiError: On stream read or JSON decode failure.
+        GoogleSecOpsApiError: On stream read or JSON decode failure.
     """
     response.raise_for_status()
 
-    # Parse stream (same as secops_client.parse_stream)
+    # Parse stream (same as google_secops_client.parse_stream)
     lines_received = 0
     batches_found = 0
     batch = ""
@@ -82,22 +82,22 @@ def parse_stream(response: httpx.Response) -> Iterator[dict]:
         error_msg = f"Stream read error: {exc}"
         applogger.error(
             consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX, "parse_stream", "SecOpsAPI", error_msg
+                consts.LOG_PREFIX, "parse_stream", "GoogleSecOpsAPI", error_msg
             )
         )
-        raise SecOpsApiError(error_msg) from exc
+        raise GoogleSecOpsApiError(error_msg) from exc
     finally:
         applogger.info(
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 "parse_stream",
-                "SecOpsAPI",
+                "GoogleSecOpsAPI",
                 f"Stream complete: lines_received={lines_received}, batches_found={batches_found}",
             )
         )
 
 
-class SecOpsClient:
+class GoogleSecOpsClient:
     """Client for polling Google SecOps Detection Alerts API.
 
     Handles:
@@ -110,17 +110,17 @@ class SecOpsClient:
     def __init__(
         self,
         auth: GoogleServiceAccountAuth,
-        project_id: str = consts.SECOPS_PROJECT_ID,
-        region: str = consts.SECOPS_REGION,
-        instance_id: str = consts.SECOPS_INSTANCE_ID,
+        project_id: str = consts.GOOLE_SECOPS_PROJECT_ID,
+        region: str = consts.GOOLE_SECOPS_REGION,
+        instance_id: str = consts.GOOLE_SECOPS_INSTANCE_ID,
     ):
         """Initialize SecOps client.
 
         Args:
             auth: GoogleServiceAccountAuth instance for API authentication.
-            project_id: SecOps project ID.
-            region: SecOps region (us, europe, asia-southeast1).
-            instance_id: SecOps instance ID.
+            project_id: Google SecOps project ID.
+            region: Google SecOps region (us, europe, asia-southeast1).
+            instance_id: Google SecOps instance ID.
 
         Raises:
             ValueError: If any required configuration is missing.
@@ -131,8 +131,8 @@ class SecOpsClient:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "SecOpsClient",
-                f"Missing SecOps config: project_id={project_id}, "
+                "GoogleSecOpsClient",
+                f"Missing Google SecOps config: project_id={project_id}, "
                 f"region={region}, instance_id={instance_id}",
             )
             applogger.error(error_msg)
@@ -148,14 +148,14 @@ class SecOpsClient:
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "SecOpsClient",
-                f"Initialized SecOps client with endpoint: {self._endpoint[:50]}...",
+                "GoogleSecOpsClient",
+                f"Initialized Google SecOps client with endpoint: {self._endpoint[:50]}...",
             )
         )
 
     @staticmethod
     def _build_endpoint(project_id: str, region: str, instance_id: str) -> str:
-        """Build SecOps API endpoint URL."""
+        """Build Google SecOps API endpoint URL."""
         return (
             f"https://{region}-chronicle.googleapis.com/v1alpha/"
             f"projects/{project_id}/locations/{region}/"
@@ -185,7 +185,7 @@ class SecOpsClient:
             Tuple of (batch_dict, next_token, next_start_time).
 
         Raises:
-            SecOpsConnectorError: If too many consecutive API failures occur.
+            GoogleSecOpsConnectorError: If too many consecutive API failures occur.
         """
         __method_name = inspect.currentframe().f_code.co_name
         current_token = page_token
@@ -196,7 +196,7 @@ class SecOpsClient:
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "SecOpsClient",
+                "GoogleSecOpsClient",
                 f"Starting detection batch polling from {page_start_time}",
             )
         )
@@ -206,11 +206,11 @@ class SecOpsClient:
                 error_msg = consts.LOG_FORMAT.format(
                     consts.LOG_PREFIX,
                     __method_name,
-                    "SecOpsClient",
+                    "GoogleSecOpsClient",
                     f"Too many consecutive API failures: {consecutive_failures}",
                 )
                 applogger.error(error_msg)
-                raise SecOpsConnectorError(error_msg)
+                raise GoogleSecOpsConnectorError(error_msg)
 
             if consecutive_failures > 0:
                 self._sleep_with_backoff(consecutive_failures)
@@ -228,7 +228,7 @@ class SecOpsClient:
                     consts.LOG_FORMAT.format(
                         consts.LOG_PREFIX,
                         __method_name,
-                        "SecOpsClient",
+                        "GoogleSecOpsClient",
                         f"API call failed, retrying "
                         f"(attempt {consecutive_failures}/{consts.MAX_CONSECUTIVE_FAILURES}): "
                         f"{str(exc)[:100]}",
@@ -248,7 +248,7 @@ class SecOpsClient:
                     consts.LOG_FORMAT.format(
                         consts.LOG_PREFIX,
                         __method_name,
-                        "SecOpsClient",
+                        "GoogleSecOpsClient",
                         "Window complete, moving to next",
                     )
                 )
@@ -259,7 +259,7 @@ class SecOpsClient:
                     consts.LOG_FORMAT.format(
                         consts.LOG_PREFIX,
                         __method_name,
-                        "SecOpsClient",
+                        "GoogleSecOpsClient",
                         "Time budget exhausted",
                     )
                 )
@@ -276,7 +276,7 @@ class SecOpsClient:
         page_token: Optional[str],
         deadline: Optional[float],
     ) -> dict:
-        """Make a single streaming HTTP request to the SecOps API.
+        """Make a single streaming HTTP request to the Google SecOps API.
 
         Args:
             page_start: Window start time.
@@ -287,8 +287,8 @@ class SecOpsClient:
             Parsed JSON batch dict.
 
         Raises:
-            SecOpsApiError: On HTTP errors or stream read failures.
-            SecOpsConnectorError: If deadline exceeded.
+            GoogleSecOpsApiError: On HTTP errors or stream read failures.
+            GoogleSecOpsConnectorError: If deadline exceeded.
         """
         __method_name = inspect.currentframe().f_code.co_name
 
@@ -296,11 +296,11 @@ class SecOpsClient:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "SecOpsClient",
+                "GoogleSecOpsClient",
                 "Time budget exhausted before API call",
             )
             applogger.error(error_msg)
-            raise SecOpsConnectorError(error_msg)
+            raise GoogleSecOpsConnectorError(error_msg)
 
         request_body = self._build_request_body(page_start, page_token)
 
@@ -308,7 +308,7 @@ class SecOpsClient:
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "SecOpsClient",
+                "GoogleSecOpsClient",
                 f"API call (batch={consts.DETECTION_BATCH_SIZE}, "
                 f"max={consts.MAX_DETECTIONS}, "
                 f"timeout={consts.API_TIMEOUT_SECONDS}s)",
@@ -353,11 +353,11 @@ class SecOpsClient:
                         error_msg = consts.LOG_FORMAT.format(
                             consts.LOG_PREFIX,
                             __method_name,
-                            "SecOpsClient",
+                            "GoogleSecOpsClient",
                             f"Failed to parse stream JSON: {exc}",
                         )
                         applogger.error(error_msg)
-                        raise SecOpsApiError(error_msg) from exc
+                        raise GoogleSecOpsApiError(error_msg) from exc
                     batch = ""
 
                     if obj.get("heartbeat"):
@@ -365,7 +365,7 @@ class SecOpsClient:
                             consts.LOG_FORMAT.format(
                                 consts.LOG_PREFIX,
                                 __method_name,
-                                "SecOpsClient",
+                                "GoogleSecOpsClient",
                                 "Heartbeat received (connection active)",
                             )
                         )
@@ -376,7 +376,7 @@ class SecOpsClient:
                             consts.LOG_FORMAT.format(
                                 consts.LOG_PREFIX,
                                 __method_name,
-                                "SecOpsClient",
+                                "GoogleSecOpsClient",
                                 f"Batch received with "
                                 f"{len(obj.get('detections', []))} detections",
                             )
@@ -384,42 +384,42 @@ class SecOpsClient:
                         final_response = obj
                         break
 
-        except SecOpsApiError:
+        except GoogleSecOpsApiError:
             # Already wrapped/logged by _check_response_status; don't re-wrap
             raise
         except httpx.TimeoutException as exc:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "SecOpsClient",
+                "GoogleSecOpsClient",
                 f"Request timed out after {consts.API_TIMEOUT_SECONDS}s: {exc}",
             )
             applogger.error(error_msg)
-            raise SecOpsApiError(error_msg) from exc
+            raise GoogleSecOpsApiError(error_msg) from exc
         except httpx.RequestError as exc:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "SecOpsClient",
+                "GoogleSecOpsClient",
                 f"Network error: {exc}",
             )
             applogger.error(error_msg)
-            raise SecOpsApiError(error_msg) from exc
+            raise GoogleSecOpsApiError(error_msg) from exc
         except Exception as exc:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "SecOpsClient",
+                "GoogleSecOpsClient",
                 f"Unexpected error during API call: {exc}",
             )
             applogger.error(error_msg)
-            raise SecOpsApiError(error_msg) from exc
+            raise GoogleSecOpsApiError(error_msg) from exc
 
         return final_response
 
     @staticmethod
     def _build_request_body(page_start: str, page_token: Optional[str]) -> dict:
-        """Build SecOps API request body.
+        """Build Google SecOps API request body.
 
         Picks pageToken when continuing mid-window, otherwise pageStartTime.
         """
@@ -441,7 +441,7 @@ class SecOpsClient:
         page_token: Optional[str],
         page_start: str,
     ) -> None:
-        """Check HTTP response status and raise SecOpsApiError on errors.
+        """Check HTTP response status and raise GoogleSecOpsApiError on errors.
 
         Provides config-specific guidance for the common SecOps misconfigurations:
           - 400: malformed request body or invalid parameter values
@@ -455,7 +455,7 @@ class SecOpsClient:
             page_start: Request's start time (for diagnostics).
 
         Raises:
-            SecOpsApiError: On HTTP error responses.
+            GoogleSecOpsApiError: On HTTP error responses.
         """
         __method_name = inspect.currentframe().f_code.co_name
         status = response.status_code
@@ -471,9 +471,9 @@ class SecOpsClient:
             body_snippet = ""
 
         diagnostics = (
-            f"project_id={consts.SECOPS_PROJECT_ID}, "
-            f"region={consts.SECOPS_REGION}, "
-            f"instance_id={consts.SECOPS_INSTANCE_ID}, "
+            f"project_id={consts.GOOLE_SECOPS_PROJECT_ID}, "
+            f"region={consts.GOOLE_SECOPS_REGION}, "
+            f"instance_id={consts.GOOLE_SECOPS_INSTANCE_ID}, "
             f"pageToken={'set' if page_token else 'not set'}, "
             f"pageStart={page_start or 'not set'}"
         )
@@ -486,19 +486,19 @@ class SecOpsClient:
         elif status == 401:
             hint = (
                 "Unauthorized (401) - invalid or expired credentials, or "
-                "incorrect SecOpsInstanceId. Verify the instance ID."
+                "incorrect GoogleSecopsInstanceId. Verify the instance ID."
             )
         elif status == 403:
             hint = (
-                "Forbidden (403) - service account lacks Chronicle API "
-                "permission, or incorrect SecOpsProjectId. Verify the project "
-                "ID and that the service account has the Chronicle API Viewer "
+                "Forbidden (403) - service account lacks Google SecOps API "
+                "permission, or incorrect GoogleSecopsProjectId. Verify the project "
+                "ID and that the service account has the Google SecOps API Viewer "
                 "(or equivalent) role."
             )
         elif status == 404:
             hint = (
                 "Not Found (404) - endpoint does not exist. Verify "
-                "SecOpsRegion (e.g. 'us', 'europe', 'asia-southeast1') and "
+                "GoogleSecopsRegion (e.g. 'us', 'europe', 'asia-southeast1') and "
                 "that the project/instance combination is valid for that region."
             )
         else:
@@ -507,12 +507,12 @@ class SecOpsClient:
         error_msg = consts.LOG_FORMAT.format(
             consts.LOG_PREFIX,
             __method_name,
-            "SecOpsClient",
+            "GoogleSecOpsClient",
             f"{hint} | {diagnostics}"
             + (f" | response_body={body_snippet}" if body_snippet else ""),
         )
         applogger.error(error_msg)
-        raise SecOpsApiError(error_msg, status_code=status)
+        raise GoogleSecOpsApiError(error_msg, status_code=status)
 
     # ─── Internal: Retry Logic ─────────────────────────────────────────────────
 
@@ -523,7 +523,7 @@ class SecOpsClient:
         Retryable: HTTP 429/5xx, network timeouts, transport errors.
         Not retryable: HTTP 400/401, JSON parse errors.
         """
-        if isinstance(exc, SecOpsApiError):
+        if isinstance(exc, GoogleSecOpsApiError):
             return exc.status_code in consts.RETRYABLE_STATUS_CODES
 
         # httpx.TimeoutException is a subclass of RequestError, so this covers both
@@ -541,7 +541,7 @@ class SecOpsClient:
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
-                "SecOpsClient",
+                "GoogleSecOpsClient",
                 f"Backoff {delay:.1f}s before retry {attempt}/{consts.MAX_CONSECUTIVE_FAILURES}",
             )
         )

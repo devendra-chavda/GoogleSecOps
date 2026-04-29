@@ -1,6 +1,6 @@
 id: a7c9d8f2-4e1b-4a2f-9c3d-5e8f7a2b9c1d
 Function:
-  Title: Google Chronicle Security Detection Events
+  Title: Google SecOps Detection Alerts
   Version: '1.0.0'
   LastUpdated: '2026-04-24'
 Category: Microsoft Sentinel Parser
@@ -20,7 +20,7 @@ FunctionQuery: |
     let dummy_table = datatable(TimeGenerated: datetime, id: string) [];
     let GoogleSecOpsDetectionAlerts = view () {
         union isfuzzy=true dummy_table,
-        GCSDetectionAlerts_CL
+        DetectionAlerts_CL
         | extend
             detection_array=column_ifexists("detection", dynamic([]))
         | where isnotnull(detection_array) and array_length(detection_array) > 0

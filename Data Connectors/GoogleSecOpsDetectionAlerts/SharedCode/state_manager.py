@@ -2,7 +2,7 @@
 
 This module handles:
 1. Checkpoint persistence: tracks API pagination state between runs
-2. Data file I/O: stores raw detection batches from SecOps
+2. Data file I/O: stores raw detection batches from Google SecOps
 3. Time window management: computes lookback windows for fetching
 
 Checkpoint Format:
@@ -41,7 +41,7 @@ class StateManager:
 
     Two use cases:
     1. Checkpoint tracking: save pagination state between function invocations
-    2. Raw data storage: buffer detection batches from SecOps before ingestion
+    2. Raw data storage: buffer detection batches from Google SecOps before ingestion
     """
 
     def __init__(
@@ -317,7 +317,7 @@ class StateManager:
         """Compute ISO timestamp for N days ago with buffer.
 
         Adds a buffer to prevent missing data at time window boundaries.
-        Useful when SecOps time windows align with exact seconds.
+        Useful when Google SecOps time windows align with exact seconds.
 
         Formula: now - days_ago - LOOKBACK_BUFFER_MINUTES
 

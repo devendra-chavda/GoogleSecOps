@@ -7,7 +7,7 @@ status: Available
 requiredDataConnectors:
   - connectorId: GoogleCloudSecurityOperationsAlert
     dataTypes:
-      - GCSDetectionAlerts_CL
+      - DetectionAlerts_CL
 queryFrequency: 30m
 queryPeriod: 2h
 triggerOperator: gt

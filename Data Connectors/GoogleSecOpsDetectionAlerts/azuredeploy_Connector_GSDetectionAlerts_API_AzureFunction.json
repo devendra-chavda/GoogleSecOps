@@ -2,44 +2,21 @@
   "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
-    "FunctionName": {
-      "defaultValue": "GSDAlerts",
-      "minLength": 1,
-      "maxLength": 11,
+    "DetectionAlertsTableName": {
       "type": "string",
-      "metadata": {
-        "description": "Function app name prefix (1-11 chars)"
-      }
-    },
-    "Location": {
-      "defaultValue": "[resourceGroup().location]",
-      "type": "string",
-      "metadata": {
-        "description": "The location in which the data collection rules and data collection endpoints should be deployed."
-      }
-    },
-    "WorkspaceName": {
-      "type": "string",
-      "minLength": 1,
-      "metadata": {
-        "description": "Log Analytics workspace name. Can be found under Log Analytics Settings."
-      }
-    },
-    "GCSDetectionAlertsTableName": {
-      "type": "string",
-      "defaultValue": "GCSDetectionAlerts",
+      "defaultValue": "DetectionAlerts",
       "maxLength": 52,
       "metadata": {
-        "description": "Enter name of the table used to store detection alerts. Default: GCSDetectionAlerts."
+        "description": "Enter name of the table used to store detection alerts. Default: DetectionAlerts."
       }
     },
-    "SecOpsProjectId": {
+    "GoogleSecopsProjectId": {
       "type": "string",
       "metadata": {
-        "description": "Google Cloud project ID hosting the SecOps instance."
+        "description": "Google Cloud project ID hosting the Google SecOps instance."
       }
     },
-    "SecOpsRegion": {
+    "GoogleSecopsRegion": {
       "type": "string",
       "defaultValue": "",
       "minLength": 1,
@@ -68,19 +45,35 @@
         "southamerica-east1"
       ],
       "metadata": {
-        "description": "SecOps instance region. Select from the dropdown list of supported regions."
+        "description": "Google SecOps instance region. Select from the dropdown list of supported regions."
       }
     },
-    "SecOpsInstanceId": {
+    "GoogleSecopsInstanceId": {
       "type": "string",
       "metadata": {
-        "description": "SecOps instance ID."
+        "description": "Google SecOps instance ID."
       }
     },
-    "SecOpsServiceAccountJson": {
+    "GoogleSecopsServiceAccountJson": {
       "type": "securestring",
       "metadata": {
         "description": "Full JSON content of the Google Cloud service-account key."
+      }
+    },
+    "GoogleOAuthScope": {
+      "type": "string",
+      "defaultValue": "https://www.googleapis.com/auth/cloud-platform",
+      "metadata": {
+        "description": "Google OAuth scope for service account authentication. Default is cloud-platform scope for full access."
+      }
+    },
+    "FunctionName": {
+      "defaultValue": "GSDAlerts",
+      "minLength": 1,
+      "maxLength": 11,
+      "type": "string",
+      "metadata": {
+        "description": "Function app name prefix (1-11 chars)"
       }
     },
     "LookbackDays": {
@@ -89,10 +82,10 @@
       "minValue": 1,
       "maxValue": 7,
       "metadata": {
-        "description": "Number of days to look back for initial data pull. Range: 1-7 days. Calculation: current UTC time - N days. Example: if current time is 2026-04-15T00:01:23Z and LookbackDays=1, start time will be 2026-04-14T00:01:23Z. Subsequent runs use the persisted checkpoint."
+        "description": "Number of days to look back for initial data pull. Range: 1-7 days. Calculation: current UTC time - N days. Example: if current time is 2026-04-15T00:00:00Z and LookbackDays=1, start time will be 2026-04-14T00:05:00Z. Subsequent runs use the persisted checkpoint."
       }
     },
-    "FatchSchedule": {
+    "FetchSchedule": {
       "type": "string",
       "defaultValue": "0 */10 * * * *",
       "metadata": {
@@ -104,6 +97,26 @@
       "defaultValue": "0 2/10 * * * *",
       "metadata": {
         "description": "Timer-trigger CRON expression for AzureStorageToSentinel function (default: every 5 minutes). Ingests detections from File Share into Sentinel."
+      }
+    },
+    "LogLevel": {
+      "type": "string",
+      "defaultValue": "INFO",
+      "allowedValues": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR"
+      ],
+      "metadata": {
+        "description": "Application log level."
+      }
+    },
+    "TenantId": {
+      "type": "string",
+      "minLength": 1,
+      "metadata": {
+        "description": "Enter Tenant Id of your Microsoft Entra Id."
       }
     },
     "AzureClientId": {
@@ -127,37 +140,24 @@
         "description": "Enter Object ID of your Microsoft Entra App (from Enterprise Applications)."
       }
     },
-    "TenantId": {
+    "WorkspaceName": {
       "type": "string",
       "minLength": 1,
       "metadata": {
-        "description": "Enter Tenant Id of your Microsoft Entra Id."
-      }
-    },
-    "LogLevel": {
-      "type": "string",
-      "defaultValue": "INFO",
-      "allowedValues": [
-        "DEBUG",
-        "INFO",
-        "WARNING",
-        "ERROR"
-      ],
-      "metadata": {
-        "description": "Application log level."
-      }
-    },
-    "Scope": {
-      "type": "string",
-      "defaultValue": "https://www.googleapis.com/auth/cloud-platform",
-      "metadata": {
-        "description": "Google OAuth scope for service account authentication. Default is cloud-platform scope for full access."
+        "description": "Log Analytics workspace name. Can be found under Log Analytics Settings."
       }
     },
     "AppInsightsWorkspaceResourceID": {
       "type": "string",
       "metadata": {
         "description": "Migrate Classic Application Insights to Log Analytic Workspace which is retiring by 29 February 2024. Use Log Analytic Workspace -- Properties blade having Resource ID property value. This is a fully qualified resourceId which is in format /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.OperationalInsights/workspaces/{workspaceName}."
+      }
+    },
+    "Location": {
+      "defaultValue": "[resourceGroup().location]",
+      "type": "string",
+      "metadata": {
+        "description": "The location in which the data collection rules and data collection endpoints should be deployed."
       }
     }
   },
@@ -189,11 +189,11 @@
     {
       "type": "Microsoft.OperationalInsights/workspaces/tables",
       "apiVersion": "2022-10-01",
-      "name": "[concat(parameters('WorkspaceName'), '/', parameters('GCSDetectionAlertsTableName'), '_CL')]",
+      "name": "[concat(parameters('WorkspaceName'), '/', parameters('DetectionAlertsTableName'), '_CL')]",
       "properties": {
         "plan": "Analytics",
         "schema": {
-          "name": "[concat(parameters('GCSDetectionAlertsTableName'), '_CL')]",
+          "name": "[concat(parameters('DetectionAlertsTableName'), '_CL')]",
           "columns": [
             {
               "name": "DetectionType",
@@ -275,12 +275,12 @@
       "name": "[variables('dataRuleName')]",
       "location": "[parameters('Location')]",
       "dependsOn": [
-        "[concat(variables('logWsResId'), '/tables/', parameters('GCSDetectionAlertsTableName'), '_CL')]"
+        "[concat(variables('logWsResId'), '/tables/', parameters('DetectionAlertsTableName'), '_CL')]"
       ],
       "properties": {
         "dataCollectionEndpointId": "[resourceId('Microsoft.Insights/dataCollectionEndpoints', variables('endpointName'))]",
         "streamDeclarations": {
-          "[concat('Custom-', parameters('GCSDetectionAlertsTableName'))]": {
+          "[concat('Custom-', parameters('DetectionAlertsTableName'))]": {
             "columns": [
               {
                 "name": "type",
@@ -364,13 +364,13 @@
         "dataFlows": [
           {
             "streams": [
-              "[concat('Custom-', parameters('GCSDetectionAlertsTableName'))]"
+              "[concat('Custom-', parameters('DetectionAlertsTableName'))]"
             ],
             "destinations": [
               "[concat('RuleDest', variables('suffix'))]"
             ],
             "transformKql": "source\n| extend TimeGenerated = todatetime(now()), json_timeWindow = parse_json(timeWindow), json_latencyMetrics = parse_json(latencyMetrics)\n| extend timeWindow_startTime = todatetime(json_timeWindow.startTime), timeWindow_endTime = todatetime(json_timeWindow.endTime), latencyMetrics_oldestIngestionTime = todatetime(json_latencyMetrics.oldestIngestionTime), latencyMetrics_newestIngestionTime = todatetime(json_latencyMetrics.newestIngestionTime), latencyMetrics_oldestEventTime = todatetime(json_latencyMetrics.oldestEventTime), latencyMetrics_newestEventTime = todatetime(json_latencyMetrics.newestEventTime), latencyMetrics_ingestionLatency = tostring(json_latencyMetrics.ingestionLatency)\n| project-away json_timeWindow, timeWindow, json_latencyMetrics, latencyMetrics\n | project-rename DetectionType = ['type']",
-            "outputStream": "[concat('Custom-', parameters('GCSDetectionAlertsTableName'), '_CL')]"
+            "outputStream": "[concat('Custom-', parameters('DetectionAlertsTableName'), '_CL')]"
           }
         ]
       }
@@ -536,14 +536,14 @@
             "APPINSIGHTS_INSTRUMENTATIONKEY": "[reference(resourceId('Microsoft.insights/components', variables('FunctionName')), '2015-05-01').InstrumentationKey]",
             "APPLICATIONINSIGHTS_CONNECTION_STRING": "[reference(resourceId('microsoft.insights/components', variables('FunctionName')), '2015-05-01').ConnectionString]",
             "AzureWebJobsStorage": "[concat('DefaultEndpointsProtocol=https;AccountName=', toLower(variables('FunctionName')),';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', toLower(variables('FunctionName'))), '2019-06-01').keys[0].value, ';EndpointSuffix=',toLower(variables('StorageSuffix')))]",
-            "FatchSchedule": "[parameters('FatchSchedule')]",
+            "FetchSchedule": "[parameters('FetchSchedule')]",
             "IngestSchedule": "[parameters('IngestSchedule')]",
-            "SecOpsProjectId": "[parameters('SecOpsProjectId')]",
-            "SecOpsRegion": "[parameters('SecOpsRegion')]",
-            "SecOpsInstanceId": "[parameters('SecOpsInstanceId')]",
-            "SecOpsServiceAccountJson": "[parameters('SecOpsServiceAccountJson')]",
+            "GoogleSecopsProjectId": "[parameters('GoogleSecopsProjectId')]",
+            "GoogleSecopsRegion": "[parameters('GoogleSecopsRegion')]",
+            "GoogleSecopsInstanceId": "[parameters('GoogleSecopsInstanceId')]",
+            "GoogleSecopsServiceAccountJson": "[parameters('GoogleSecopsServiceAccountJson')]",
             "LookbackDays": "[string(parameters('LookbackDays'))]",
-            "GCSDetectionAlertsTableName": "[parameters('GCSDetectionAlertsTableName')]",
+            "DetectionAlertsTableName": "[parameters('DetectionAlertsTableName')]",
             "StateTableName": "GoogleSecOpsState",
             "LogLevel": "[parameters('LogLevel')]",
             "AZURE_CLIENT_ID": "[parameters('AzureClientId')]",
@@ -551,9 +551,9 @@
             "AZURE_TENANT_ID": "[parameters('TenantId')]",
             "AZURE_DATA_COLLECTION_ENDPOINT": "[reference(resourceId('Microsoft.Insights/dataCollectionEndpoints', variables('endpointName'))).logsIngestion.endpoint]",
             "DCR_RULE_ID": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', variables('dataRuleName'))).immutableId]",
-            "DcrStreamName": "[concat('Custom-', parameters('GCSDetectionAlertsTableName'))]",
+            "DcrStreamName": "[concat('Custom-', parameters('DetectionAlertsTableName'))]",
             "SCOPE": "[variables('scope')]",
-            "OAuthScope": "[parameters('Scope')]",
+            "OAuthScope": "[parameters('GoogleOAuthScope')]",
             "WEBSITE_RUN_FROM_PACKAGE": "https://github.com/devendra-chavda/GoogleSecOps/raw/refs/heads/main/Data%20Connectors/GoogleSecOpsDetectionAlerts/GoogleSecOpsDetectionAlerts.zip"
           }
         }

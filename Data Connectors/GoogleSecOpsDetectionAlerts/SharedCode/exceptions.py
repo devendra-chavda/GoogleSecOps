@@ -1,15 +1,15 @@
 """Exceptions for SecOps connector."""
 
 
-class SecOpsConnectorError(Exception):
+class GoogleSecOpsConnectorError(Exception):
     """Base error for the SecOps connector."""
 
 
-class SecOpsAuthError(SecOpsConnectorError):
+class GoogleSecOpsAuthError(GoogleSecOpsConnectorError):
     """Raised when Google OAuth token acquisition fails."""
 
 
-class SecOpsApiError(SecOpsConnectorError):
+class GoogleSecOpsApiError(GoogleSecOpsConnectorError):
     """Raised when the SecOps API returns a non-retryable error."""
 
     def __init__(self, message: str, status_code: int = 0, body: str = ""):
@@ -18,5 +18,5 @@ class SecOpsApiError(SecOpsConnectorError):
         self.body = body
 
 
-class SentinelIngestionError(SecOpsConnectorError):
+class SentinelIngestionError(GoogleSecOpsConnectorError):
     """Raised when posting to Sentinel DCR fails."""

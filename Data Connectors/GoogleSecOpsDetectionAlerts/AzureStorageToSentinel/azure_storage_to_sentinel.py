@@ -338,9 +338,7 @@ class AzureStorageToSentinel:
         return []
 
     def _post_to_sentinel(self, detections: list, filename: str) -> int:
-        """Post detections to Sentinel in batches.
-
-        Posts in chunks of INGESTION_BATCH_SIZE events per API call.
+        """Post detections to Sentinel.
 
         Args:
             detections: List of detection events to post
@@ -350,61 +348,39 @@ class AzureStorageToSentinel:
             Number of events successfully posted
 
         Raises:
-            Exception: If any batch fails to post
+            Exception: If posting fails
         """
         __method_name = inspect.currentframe().f_code.co_name
         total_count = len(detections)
-        batch_count = (
-            total_count + consts.INGESTION_BATCH_SIZE - 1
-        ) // consts.INGESTION_BATCH_SIZE
 
         applogger.debug(
             consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"Posting: total={total_count}, batches={batch_count}, batch_size={consts.INGESTION_BATCH_SIZE}, source={filename}",
+                f"Posting: total={total_count}, source={filename}",
             )
         )
 
-        posted_count = 0
-        for batch_num, start_idx in enumerate(
-            range(0, total_count, consts.INGESTION_BATCH_SIZE), 1
-        ):
-            end_idx = min(start_idx + consts.INGESTION_BATCH_SIZE, total_count)
-            batch = detections[start_idx:end_idx]
-            batch_size = len(batch)
-
-            try:
-                # Post batch to Sentinel
-                post_data(json.dumps(batch), consts.DCR_STREAM_NAME)
-                posted_count += batch_size
-
-                applogger.info(
-                    consts.LOG_FORMAT.format(
-                        consts.LOG_PREFIX,
-                        __method_name,
-                        consts.FUNCTION_NAME_INGESTER,
-                        f"Batch {batch_num}/{batch_count} posted: size={batch_size}, cumulative={posted_count}/{total_count}",
-                    )
-                )
-            except Exception as exc:
-                error_msg = consts.LOG_FORMAT.format(
+        try:
+            post_data(json.dumps(detections), consts.DCR_STREAM_NAME)
+            applogger.info(
+                consts.LOG_FORMAT.format(
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_INGESTER,
-                    f"CRITICAL - Batch {batch_num}/{batch_count} failed: batch_size={batch_size}, posted_so_far={posted_count}/{total_count}, error_type={type(exc).__name__}, reason={str(exc)[:150]}",
+                    f"Posted successfully: total={total_count}, stream={consts.DCR_STREAM_NAME}",
                 )
-                applogger.error(error_msg)
-                raise
-
-        applogger.info(
-            consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                consts.FUNCTION_NAME_INGESTER,
-                f"All batches posted successfully: total={posted_count}/{total_count}, batches={batch_count}, stream={consts.DCR_STREAM_NAME}",
             )
-        )
+        except Exception as exc:
+            applogger.error(
+                consts.LOG_FORMAT.format(
+                    consts.LOG_PREFIX,
+                    __method_name,
+                    consts.FUNCTION_NAME_INGESTER,
+                    f"CRITICAL - Post failed: total={total_count}, error_type={type(exc).__name__}, reason={str(exc)[:150]}",
+                )
+            )
+            raise
 
-        return posted_count
+        return total_count

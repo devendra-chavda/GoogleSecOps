@@ -34,17 +34,17 @@ VALIDATION_ERROR_MSG = "Validation error: {}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECOPS API CONFIGURATION
+#  GOOGLE SECOPS API CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 # Required: Set via ARM template or environment variables
 # These connect to your Google SecOps instance
 
-SECOPS_PROJECT_ID = os.environ.get("SecOpsProjectId", "")
-SECOPS_REGION = os.environ.get("SecOpsRegion", "us")  # us, europe, asia-southeast1
-SECOPS_INSTANCE_ID = os.environ.get("SecOpsInstanceId", "")
-SERVICE_ACCOUNT_JSON = os.environ.get("SecOpsServiceAccountJson", "")
+GOOLE_SECOPS_PROJECT_ID = os.environ.get("GoogleSecopsProjectId", "")
+GOOLE_SECOPS_REGION = os.environ.get("GoogleSecopsRegion", "us")  # us, europe, asia-southeast1
+GOOLE_SECOPS_INSTANCE_ID = os.environ.get("GoogleSecopsInstanceId", "")
+SERVICE_ACCOUNT_JSON = os.environ.get("GoogleSecopsServiceAccountJson", "")
 
-# Google OAuth configuration for SecOps API authentication
+# Google OAuth configuration for Google SecOps API authentication
 OAUTH_SCOPE = os.environ.get(
     "OAuthScope", "https://www.googleapis.com/auth/cloud-platform"
 )
@@ -89,13 +89,13 @@ AZURE_TENANT_ID = os.environ.get("AZURE_TENANT_ID", "")
 # ═══════════════════════════════════════════════════════════════════════════════
 # DETECTION FETCHING PARAMETERS
 # ═══════════════════════════════════════════════════════════════════════════════
-# Control how many detections are fetched from SecOps in each operation
+# Control how many detections are fetched from Google SecOps in each operation
 
 LOOKBACK_DAYS = int(os.environ.get("LookbackDays", "1"))  # Default: 1 day back
 MAX_LOOKBACK_DAYS = 7  # Safety limit: never go back more than 7 days
 
 DETECTION_BATCH_SIZE = int(os.environ.get("DetectionBatchSize", "1000"))
-# How many detections per SecOps API page (SecOps pagination)
+# How many detections per Google SecOps API page (Google SecOps pagination)
 
 MAX_DETECTIONS = int(os.environ.get("MaxDetections", "1000"))
 # How many detections to fetch before stopping (per run)
@@ -129,9 +129,9 @@ BUSY_WAIT_SLEEP_SECONDS = 10  # Sleep between checks (avoids CPU spinning)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Error handling and timeouts for API calls
 
-# SecOps API streaming timeout
+# Google SecOps API streaming timeout
 API_TIMEOUT_SECONDS = 300  # 5 minutes
-# SecOps server sends heartbeat every ~15 seconds
+# Google SecOps server sends heartbeat every ~15 seconds
 # 300s timeout is safe for detecting truly dead connections
 
 # Retry behavior for transient errors

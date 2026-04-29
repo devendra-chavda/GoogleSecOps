@@ -10,55 +10,26 @@ import json
 import time
 
 from ..SharedCode import consts
-from ..SharedCode.secops_client import SecOpsClient
-from ..SharedCode.exceptions import SecOpsConnectorError
+from ..SharedCode.google_secops_client import GoogleSecOpsClient
+from ..SharedCode.exceptions import GoogleSecOpsConnectorError
 from ..SharedCode.google_auth import GoogleServiceAccountAuth
 from ..SharedCode.logger import applogger
 from ..SharedCode.state_manager import StateManager
 
 
 class GoogleSecOpsToStorage:
-    """Fetch detection batches from SecOps and save to Azure File Share."""
+    """Fetch detection batches from Google SecOps and save to Azure File Share."""
 
     def __init__(self) -> None:
-        """Initialize SecOps client, checkpoint manager, and validate configuration."""
-        self._validate_env_vars()
+        """Initialize Google SecOps client, checkpoint manager, and validate configuration."""
         self._auth = GoogleServiceAccountAuth()
-        self._client = SecOpsClient(self._auth)
+        self._client = GoogleSecOpsClient(self._auth)
         self._checkpoint = StateManager(
             connection_string=consts.CONN_STRING,
             file_path=consts.CHECKPOINT_FILE_NAME,
             share_name=consts.FILE_SHARE_NAME,
         )
         self._start_time = int(time.time())
-
-    def _validate_env_vars(self) -> None:
-        """Verify all required environment variables are configured.
-
-        Raises:
-            ValueError: If any required environment variables are missing
-        """
-        __method_name = inspect.currentframe().f_code.co_name
-        required_vars = [
-            ("AzureWebJobsStorage", consts.CONN_STRING),
-            ("SecOpsProjectId", consts.SECOPS_PROJECT_ID),
-            ("SecOpsRegion", consts.SECOPS_REGION),
-            ("SecOpsInstanceId", consts.SECOPS_INSTANCE_ID),
-            ("SecOpsServiceAccountJson", consts.SERVICE_ACCOUNT_JSON),
-            ("AZURE_DATA_COLLECTION_ENDPOINT", consts.DCE_ENDPOINT),
-            ("DCR_RULE_ID", consts.DCR_IMMUTABLE_ID),
-            ("DcrStreamName", consts.DCR_STREAM_NAME),
-        ]
-        missing = [name for name, val in required_vars if not val]
-        if missing:
-            error_msg = consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                consts.FUNCTION_NAME_FETCHER,
-                f"Missing required environment variables: {missing}",
-            )
-            applogger.error(error_msg)
-            raise ValueError(error_msg)
 
     def run(self) -> None:
         """Fetch detection batches from SecOps API and save to Azure File Share.
@@ -104,7 +75,7 @@ class GoogleSecOpsToStorage:
                 )
             )
 
-        except SecOpsConnectorError as exc:
+        except GoogleSecOpsConnectorError as exc:
             error_msg = consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,

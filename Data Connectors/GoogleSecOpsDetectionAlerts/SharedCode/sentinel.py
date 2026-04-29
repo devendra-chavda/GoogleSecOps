@@ -32,55 +32,31 @@ def _get_credential():
     """
     __method_name = inspect.currentframe().f_code.co_name
 
-    # Check if explicit credentials are provided
     client_id = consts.AZURE_CLIENT_ID
     client_secret = consts.AZURE_CLIENT_SECRET
     tenant_id = consts.AZURE_TENANT_ID
-
-    # Validate that either all or none of the credentials are provided
-    credentials_provided = [bool(client_id), bool(client_secret), bool(tenant_id)]
-    if any(credentials_provided) and not all(credentials_provided):
-        missing = []
-        if not client_id:
-            missing.append("AZURE_CLIENT_ID")
-        if not client_secret:
-            missing.append("AZURE_CLIENT_SECRET")
-        if not tenant_id:
-            missing.append("AZURE_TENANT_ID")
-
+    try:
+        credential = ClientSecretCredential(
+            client_id=client_id, client_secret=client_secret, tenant_id=tenant_id
+        )
+        applogger.debug(
+            consts.LOG_FORMAT.format(
+                consts.LOG_PREFIX,
+                __method_name,
+                "SentinelAuth",
+                f"Using ClientSecretCredential (client_id={client_id[:20]}...)",
+            )
+        )
+        return credential
+    except Exception as exc:
         error_msg = consts.LOG_FORMAT.format(
             consts.LOG_PREFIX,
             __method_name,
             "SentinelAuth",
-            f"Incomplete Azure authentication config: missing {missing}",
+            f"Failed to create ClientSecretCredential: type={type(exc).__name__}, reason={str(exc)[:150]}",
         )
         applogger.error(error_msg)
-        raise ValueError(error_msg)
-
-    # Use explicit credentials if all provided
-    if all(credentials_provided):
-        try:
-            credential = ClientSecretCredential(
-                client_id=client_id, client_secret=client_secret, tenant_id=tenant_id
-            )
-            applogger.debug(
-                consts.LOG_FORMAT.format(
-                    consts.LOG_PREFIX,
-                    __method_name,
-                    "SentinelAuth",
-                    f"Using ClientSecretCredential (client_id={client_id[:20]}...)",
-                )
-            )
-            return credential
-        except Exception as exc:
-            error_msg = consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                "SentinelAuth",
-                f"Failed to create ClientSecretCredential: type={type(exc).__name__}, reason={str(exc)[:150]}",
-            )
-            applogger.error(error_msg)
-            raise ValueError(error_msg) from exc
+        raise ValueError(error_msg) from exc
 
 
 def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
@@ -108,25 +84,6 @@ def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
     endpoint = consts.DCE_ENDPOINT.strip()
     rule_id = consts.DCR_IMMUTABLE_ID.strip()
     stream = stream_name.strip() if stream_name else ""
-
-    missing = [
-        name
-        for name, val in [
-            ("DCEEndpoint", endpoint),
-            ("DCRImmutableId", rule_id),
-            ("DCRStreamName", stream),
-        ]
-        if not val
-    ]
-    if missing:
-        error_msg = consts.LOG_FORMAT.format(
-            consts.LOG_PREFIX,
-            __method_name,
-            azure_function_name,
-            f"Missing required configuration: {missing}",
-        )
-        applogger.error(error_msg)
-        raise SentinelIngestionError(error_msg)
 
     try:
         records = json.loads(body)

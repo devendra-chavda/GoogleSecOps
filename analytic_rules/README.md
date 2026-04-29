@@ -106,7 +106,7 @@ For each rule, set up:
 These rules depend on the Chronicle Detection parser:
 - **Parser Name:** `chronicle_detection`
 - **Parser File:** `../parsers/chronicle_detection.yaml`
-- **Data Source:** `GCSDetectionAlerts_CL`
+- **Data Source:** `DetectionAlerts_CL`
 
 **Key Parser Fields Used:**
 
@@ -280,7 +280,7 @@ AzureDiagnostics
 
 2. **Verify data ingestion**
    ```kusto
-   GCSDetectionAlerts_CL
+   DetectionAlerts_CL
    | where TimeGenerated > ago(1h)
    | count
    ```
