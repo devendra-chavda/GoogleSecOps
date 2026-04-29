@@ -73,7 +73,7 @@ class GoogleSecOpsToStorage:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_FETCHER,
-                f"Fetching: start={page_start[:10]}, token={'yes' if page_token else 'no'}",
+                f"Fetching: start={page_start[:10]}, token={page_token if page_token else 'no'}",
             )
         )
 

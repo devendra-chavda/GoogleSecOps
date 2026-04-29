@@ -32,8 +32,8 @@ from .logger import applogger
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Buffer time added when computing lookback window (prevents data loss on boundaries)
-LOOKBACK_BUFFER_MINUTES = 5
+# Buffer time added when computing lookback window
+LOOKBACK_BUFFER_MINUTES = -5
 
 
 class StateManager:
@@ -203,7 +203,7 @@ class StateManager:
                 consts.LOG_PREFIX,
                 __method_name,
                 "StateManager",
-                f"Checkpoint saved (start={page_start_time[:10]}, token={'yes' if page_token else 'no'})",
+                f"Checkpoint saved (start={page_start_time[:10]}, token={page_token if page_token else 'no'})",
             )
         )
 
@@ -248,7 +248,7 @@ class StateManager:
                         consts.LOG_PREFIX,
                         __method_name,
                         "StateManager",
-                        f"Resuming from checkpoint (date={page_start[:10]}, token={'yes' if page_token else 'no'})",
+                        f"Resuming from checkpoint (date={page_start[:10]}, token={page_token if page_token else 'no'})",
                     )
                 )
                 return page_start, page_token
