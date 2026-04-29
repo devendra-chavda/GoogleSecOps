@@ -87,50 +87,6 @@ class GoogleServiceAccountAuth:
             applogger.error(error_msg)
             raise SecOpsAuthError(error_msg) from exc
 
-    def get_access_token(self) -> str:
-        """Get or refresh access token."""
-        __method_name = inspect.currentframe().f_code.co_name
-        now = time.time()
-        if self._is_token_valid(now):
-            applogger.debug(
-                consts.LOG_FORMAT.format(
-                    consts.LOG_PREFIX,
-                    __method_name,
-                    "GoogleServiceAccountAuth",
-                    "Using cached access token (still valid)",
-                )
-            )
-            return self._token
-
-        try:
-            self._creds.refresh(Request())
-            self._token = self._creds.token
-
-            # Set expiry: use credential expiry if available, otherwise 3600 seconds
-            if self._creds.expiry:
-                self._token_expiry = self._creds.expiry.timestamp()
-            else:
-                self._token_expiry = now + 3600
-
-            applogger.info(
-                consts.LOG_FORMAT.format(
-                    consts.LOG_PREFIX,
-                    __method_name,
-                    "GoogleServiceAccountAuth",
-                    "Successfully acquired new Google access token",
-                )
-            )
-            return self._token
-        except Exception as exc:
-            error_msg = consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                "GoogleServiceAccountAuth",
-                f"Token refresh failed: {exc}",
-            )
-            applogger.error(error_msg)
-            raise SecOpsAuthError(error_msg) from exc
-
     def get_credentials(self):
         """Return the underlying service account credentials."""
         return self._creds
