@@ -8,7 +8,7 @@
       "maxLength": 11,
       "type": "string",
       "metadata": {
-        "description": "Function app name prefix (1-11 chars). A unique suffix is appended automatically."
+        "description": "Function app name prefix (1-11 chars)"
       }
     },
     "Location": {
@@ -30,7 +30,7 @@
       "defaultValue": "GCSDetectionAlerts",
       "maxLength": 52,
       "metadata": {
-        "description": "Enter name of the table used to store detection alerts. Default is GCSDetectionAlerts."
+        "description": "Enter name of the table used to store detection alerts. Default: GCSDetectionAlerts."
       }
     },
     "SecOpsProjectId": {
@@ -41,7 +41,8 @@
     },
     "SecOpsRegion": {
       "type": "string",
-      "defaultValue": "us",
+      "defaultValue": "",
+      "minLength": 1,
       "allowedValues": [
         "us",
         "eu",
