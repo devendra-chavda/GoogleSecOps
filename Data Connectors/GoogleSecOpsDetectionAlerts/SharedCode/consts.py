@@ -137,7 +137,7 @@ API_TIMEOUT_SECONDS = 300  # 5 minutes
 
 # Retry behavior for transient errors
 RETRY_BASE_DELAY_SECONDS = 2  # Initial backoff delay: 2 seconds
-MAX_CONSECUTIVE_FAILURES = 7  # Give up after 7 consecutive errors
+MAX_CONSECUTIVE_FAILURES = 3  # Give up after 3 consecutive errors
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}  # HTTP codes to retry on
 
 # Function timeout calculated from Azure schedule (CRON expression)
