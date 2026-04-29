@@ -1,0 +1,65 @@
+id: 12345678-1234-1234-1234-123456789002
+name: Chronicle - Brute Force Attack Detection
+description: |
+  'Detects brute force attacks from GreyNoise Intelligence threat feed. Identifies multiple blocked login attempts from IPs flagged as malicious. Creates incident when suspicious IPs attempt repeated authentication failures.'
+severity: High
+status: Available
+requiredDataConnectors:
+  - connectorId: GoogleCloudSecurityOperationsAlert
+    dataTypes:
+      - GCSDetectionAlerts_CL
+queryFrequency: 10m
+queryPeriod: 30m
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - CredentialAccess
+  - Execution
+relevantTechniques:
+  - T1110
+  - T1078
+query: |
+  secops_detection
+  # | where ruleName has "brute_force" or ruleName has "greynoise"
+  | where severity == "HIGH" or severity == "CRITICAL"
+  | where alert_state == "ALERTING"
+  # | extend
+  #     AttackingIP = var_correlation_ip,
+  #     TargetHost = var_principal_hostname,
+  #     AttackCount = var_principal_ip_count,
+  #     RiskLevel = risk_score,
+      # DetectionSource = "GreyNoise Intelligence"
+  # | summarize
+  #     TotalDetections = count(),
+  #     UniqueTargetHosts = dcount(var_target_hostname),
+  #     MaxRiskScore = max(risk_score),
+  #     FirstDetectionTime = min(createdTime),
+  #     LastDetectionTime = max(createdTime),
+  #     TargetList = make_set(var_target_hostname),
+  #     UserList = make_set(var_target_user_userid)
+  #     by var_correlation_ip, ruleName, severity
+  # | where TotalDetections > 1
+  # | sort by MaxRiskScore desc, TotalDetections desc
+entityMappings:
+  - entityType: IP
+    fieldMappings:
+      - identifier: Address
+        columnName: var_correlation_ip
+customDetails:
+  RuleName: ruleName
+  RiskScore: MaxRiskScore
+  DetectionCount: TotalDetections
+  UniqueTargets: UniqueTargetHosts
+  TargetHosts: TargetList
+  TargetUsers: UserList
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reGroupPeriod: 4h
+    matchingAttribute: var_correlation_ip
+    reopenClosedIncident: false
+version: 1.0.0
+kind: Scheduled
