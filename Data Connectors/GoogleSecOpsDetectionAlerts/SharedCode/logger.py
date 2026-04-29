@@ -12,7 +12,7 @@ LOG_LEVELS = {
     "ERROR": logging.ERROR,
 }
 
-applogger = logging.getLogger("azure")
+applogger = logging.getLogger(consts.LOG_PREFIX)
 log_level = LOG_LEVELS.get(consts.LOG_LEVEL.upper(), logging.INFO)
 applogger.setLevel(log_level)
 

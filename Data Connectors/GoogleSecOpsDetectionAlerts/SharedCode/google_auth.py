@@ -1,11 +1,8 @@
 """Google service account OAuth2 token provider."""
 
-import time
-from typing import Optional
 import inspect
 
 from google.oauth2 import service_account
-from google.auth.transport.requests import Request
 import json
 
 from . import consts
@@ -17,9 +14,8 @@ class GoogleServiceAccountAuth:
     """Manage Google OAuth2 tokens from service account credentials."""
 
     def __init__(self, service_account_json: str = consts.SERVICE_ACCOUNT_JSON):
+        """Load and validate service account credentials."""
         self._validate_and_load(service_account_json)
-        self._token: Optional[str] = None
-        self._token_expiry: float = 0.0
 
     def _validate_and_load(self, service_account_json: str) -> None:
         __method_name = inspect.currentframe().f_code.co_name
@@ -90,9 +86,3 @@ class GoogleServiceAccountAuth:
     def get_credentials(self):
         """Return the underlying service account credentials."""
         return self._creds
-
-    def _is_token_valid(self, now: float) -> bool:
-        return (
-            self._token
-            and now < self._token_expiry - consts.TOKEN_EXPIRY_BUFFER_SECONDS
-        )

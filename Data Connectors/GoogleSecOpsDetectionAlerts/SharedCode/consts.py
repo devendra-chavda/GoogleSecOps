@@ -25,23 +25,15 @@ FUNCTION_NAME_INGESTER = (
     "AzureStorageToSentinel"  # Second function (Storage → Sentinel)
 )
 
-# Error messages
-UNEXPECTED_ERROR_MSG = "Unexpected error: {}"
-TIMEOUT_ERROR_MSG = "Timeout reached during Sentinel ingestion. Sent {}/{} records."
-NETWORK_ERROR_MSG = "Network error: {}"
-AUTH_ERROR_MSG = "Authentication error: {}"
-VALIDATION_ERROR_MSG = "Validation error: {}"
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 #  GOOGLE SECOPS API CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 # Required: Set via ARM template or environment variables
 # These connect to your Google SecOps instance
 
-GOOLE_SECOPS_PROJECT_ID = os.environ.get("GoogleSecopsProjectId", "")
-GOOLE_SECOPS_REGION = os.environ.get("GoogleSecopsRegion", "us")  # us, europe, asia-southeast1
-GOOLE_SECOPS_INSTANCE_ID = os.environ.get("GoogleSecopsInstanceId", "")
+GOOGLE_SECOPS_PROJECT_ID = os.environ.get("GoogleSecopsProjectId", "")
+GOOGLE_SECOPS_REGION = os.environ.get("GoogleSecopsRegion", "us")  # us, europe, asia-southeast1
+GOOGLE_SECOPS_INSTANCE_ID = os.environ.get("GoogleSecopsInstanceId", "")
 SERVICE_ACCOUNT_JSON = os.environ.get("GoogleSecopsServiceAccountJson", "")
 
 # Google OAuth configuration for Google SecOps API authentication
@@ -67,7 +59,6 @@ CHECKPOINT_FILE_NAME = os.environ.get("CheckpointFileName", "google_secops_check
 # Raw detection data (buffering between functions)
 FILE_SHARE_NAME_DATA = os.environ.get("FileShareNameData", "google-secops-data")
 FILE_NAME_PREFIX = "google_secops_raw"  # Files named: {PREFIX}_{epoch}_{index}
-MAX_CHUNK_SIZE = 1024 * 1024
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AZURE MONITOR INGESTION (SENTINEL DCR)
@@ -107,21 +98,9 @@ MAX_DETECTIONS = int(os.environ.get("MaxDetections", "1000"))
 # ═══════════════════════════════════════════════════════════════════════════════
 # Control file handling and batching through the pipeline
 
-# Ingestion: Post to Sentinel in chunks (500 events per API call)
-INGESTION_BATCH_SIZE = 500
-
 # File age before ingester picks it up (seconds)
 # Prevents race condition: gives fetcher time to finish writing before ingester reads
 MAX_FILE_AGE_FOR_INGESTION = 120  # 2 minutes
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# POLLING & MONITORING SETTINGS
-# ═══════════════════════════════════════════════════════════════════════════════
-# How often the ingester checks for new files
-
-FILE_CHECK_INTERVAL_SECONDS = 300  # 5 minutes: check for new files
-BUSY_WAIT_SLEEP_SECONDS = 10  # Sleep between checks (avoids CPU spinning)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -138,4 +117,3 @@ API_TIMEOUT_SECONDS = 300  # 5 minutes
 RETRY_BASE_DELAY_SECONDS = 2  # Initial backoff delay: 2 seconds
 MAX_CONSECUTIVE_FAILURES = 3  # Give up after 3 consecutive errors
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}  # HTTP codes to retry on
-

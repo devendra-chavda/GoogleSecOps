@@ -12,6 +12,7 @@ from azure.core.exceptions import ResourceNotFoundError
 from azure.storage.fileshare import ShareDirectoryClient
 
 from ..SharedCode import consts
+from ..SharedCode.exceptions import SentinelIngestionError
 from ..SharedCode.logger import applogger
 from ..SharedCode.sentinel import post_data
 from ..SharedCode.state_manager import StateManager
@@ -61,7 +62,7 @@ class AzureStorageToSentinel:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"Ingestion cycle started: batch_size={consts.INGESTION_BATCH_SIZE}",
+                "Ingestion cycle started",
             )
         )
 
@@ -69,46 +70,35 @@ class AzureStorageToSentinel:
         total_posted = 0
         files_processed = 0
 
-        try:
-            # Check for eligible files once per invocation
-            file_names = self._list_eligible_files()
+        # Check for eligible files once per invocation
+        file_names = self._list_eligible_files()
 
-            if not file_names:
-                applogger.info(
-                    consts.LOG_FORMAT.format(
-                        consts.LOG_PREFIX,
-                        __method_name,
-                        consts.FUNCTION_NAME_INGESTER,
-                        "No eligible files found",
-                    )
-                )
-                return
-
-            applogger.debug(
+        if not file_names:
+            applogger.info(
                 consts.LOG_FORMAT.format(
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_INGESTER,
-                    f"Processing {len(file_names)} eligible files",
+                    "No eligible files found",
                 )
             )
+            return
 
-            # Process all eligible files in this cycle
-            for filename in file_names:
-                extracted, posted = self._process_response_file(filename)
-                total_extracted += extracted
-                total_posted += posted
-                files_processed += 1
-
-        except Exception as exc:
-            error_msg = consts.LOG_FORMAT.format(
+        applogger.debug(
+            consts.LOG_FORMAT.format(
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"Error during ingestion: {exc}",
+                f"Processing {len(file_names)} eligible files",
             )
-            applogger.error(error_msg)
-            raise
+        )
+
+        # Process all eligible files in this cycle
+        for filename in file_names:
+            extracted, posted = self._process_response_file(filename)
+            total_extracted += extracted
+            total_posted += posted
+            files_processed += 1
 
         runtime = time.time() - start_time
         success_rate = (
@@ -119,7 +109,8 @@ class AzureStorageToSentinel:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_INGESTER,
-                f"Cycle complete: files={files_processed}, extracted={total_extracted}, posted={total_posted}, success_rate={success_rate:.1f}%, runtime={runtime:.1f}s",
+                f"Cycle complete: files={files_processed}, extracted={total_extracted},"
+                f" posted={total_posted}, success_rate={success_rate:.1f}%, runtime={runtime:.1f}s",
             )
         )
 
@@ -138,7 +129,7 @@ class AzureStorageToSentinel:
         __method_name = inspect.currentframe().f_code.co_name
         try:
             entries = list(
-                self._data_dir.list_directories_and_files(consts.FILE_NAME_PREFIX)
+                self._data_dir.list_directories_and_files(name_starts_with=consts.FILE_NAME_PREFIX)
             )
             all_files = [e["name"] for e in entries if not e.get("is_directory")]
             applogger.debug(
@@ -159,15 +150,6 @@ class AzureStorageToSentinel:
                 )
             )
             return []
-        except Exception as exc:
-            error_msg = consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                consts.FUNCTION_NAME_INGESTER,
-                f"Critical error listing files from data share: {exc}",
-            )
-            applogger.error(error_msg)
-            raise
 
         if not all_files:
             applogger.debug(
@@ -271,7 +253,8 @@ class AzureStorageToSentinel:
                     consts.LOG_PREFIX,
                     __method_name,
                     consts.FUNCTION_NAME_INGESTER,
-                    f"JSON parsed: {filename}, structure={type(response).__name__}, keys={list(response.keys()) if isinstance(response, dict) else 'N/A'}",
+                    f"JSON parsed: {filename}, structure={type(response).__name__},"
+                    f" keys={list(response.keys()) if isinstance(response, dict) else 'N/A'}",
                 )
             )
         except json.JSONDecodeError as err:
@@ -283,7 +266,7 @@ class AzureStorageToSentinel:
             )
             applogger.error(error_msg)
             sm.delete()
-            raise Exception(error_msg)
+            raise SentinelIngestionError(error_msg)
 
         # Extract detections
         detections = self._extract_detections(response)
@@ -326,7 +309,7 @@ class AzureStorageToSentinel:
         return extracted_count, posted_count
 
     @staticmethod
-    def _extract_detections(response) -> list:
+    def _extract_detections(response: dict | list) -> list:
         """Extract detections array from API response.
 
         Handles both dict responses (with 'detections' key) and array responses.

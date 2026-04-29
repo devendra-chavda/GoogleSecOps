@@ -8,6 +8,7 @@ function monitors and ingests the files into Microsoft Sentinel.
 import inspect
 import json
 import time
+from typing import Optional
 
 from ..SharedCode import consts
 from ..SharedCode.google_secops_client import GoogleSecOpsClient
@@ -29,7 +30,6 @@ class GoogleSecOpsToStorage:
             file_path=consts.CHECKPOINT_FILE_NAME,
             share_name=consts.FILE_SHARE_NAME,
         )
-        self._start_time = int(time.time())
 
     def run(self) -> None:
         """Fetch detection batches from SecOps API and save to Azure File Share.
@@ -111,10 +111,8 @@ class GoogleSecOpsToStorage:
         filename = f"{consts.FILE_NAME_PREFIX}_{current_epoch}_{index}"
 
         # Extract detection count
-        detections = (
-            response.get("detections", []) if isinstance(response, dict) else []
-        )
-        detection_count = len(detections) if isinstance(detections, list) else 0
+        detections = response.get("detections", [])
+        detection_count = len(detections)
 
         # Log response summary
         applogger.info(
@@ -122,7 +120,7 @@ class GoogleSecOpsToStorage:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_FETCHER,
-                f"API response #{index} has {detection_count} detections (keys={list(response.keys()) if isinstance(response, dict) else 'N/A'})",
+                f"API response #{index} has {detection_count} detections (keys={list(response.keys())})",
             )
         )
         applogger.debug(
@@ -130,7 +128,7 @@ class GoogleSecOpsToStorage:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_FETCHER,
-                f"Response #{index} structure: type={type(response).__name__}, top_level_keys={list(response.keys()) if isinstance(response, dict) else 'N/A'}",
+                f"Response #{index} structure: top_level_keys={list(response.keys())}",
             )
         )
 
@@ -152,14 +150,15 @@ class GoogleSecOpsToStorage:
                 consts.LOG_PREFIX,
                 __method_name,
                 consts.FUNCTION_NAME_FETCHER,
-                f"Batch #{index} saved: detections={detection_count}, file_size={size_kb:.1f}KB, write_time={write_elapsed:.2f}s, filename={filename}",
+                f"Batch #{index} saved: detections={detection_count},"
+                f" file_size={size_kb:.1f}KB, write_time={write_elapsed:.2f}s, filename={filename}",
             )
         )
 
         return detection_count
 
     def _update_checkpoint(
-        self, page_start: str, next_token: str, next_start: str
+        self, page_start: str, next_token: Optional[str], next_start: Optional[str]
     ) -> None:
         """Update checkpoint after successful file write.
 

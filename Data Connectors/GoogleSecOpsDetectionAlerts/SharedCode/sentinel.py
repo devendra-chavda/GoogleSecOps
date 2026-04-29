@@ -1,18 +1,14 @@
 """Post events to Azure Log Analytics via the Azure Monitor Ingestion SDK.
 
-Uses LogsIngestionClient (DCR-based ingestion) with either:
-- ClientSecretCredential (if AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID provided)
-- DefaultAzureCredential (fallback for managed identity, MSI, etc.)
-
+Uses LogsIngestionClient (DCR-based ingestion) with ClientSecretCredential.
 Requires a Data Collection Endpoint, Data Collection Rule immutable ID, and
 stream name configured as environment variables.
 """
 
 import inspect
 import json
-import os
 
-from azure.identity import DefaultAzureCredential, ClientSecretCredential
+from azure.identity import ClientSecretCredential
 from azure.monitor.ingestion import LogsIngestionClient
 from azure.core.exceptions import HttpResponseError
 
@@ -22,41 +18,24 @@ from .logger import applogger
 
 
 def _get_credential():
-    """Get Azure credential (ClientSecretCredential if configured, otherwise DefaultAzureCredential).
-
-    Returns:
-        Azure credential object
-
-    Raises:
-        ValueError: If ClientSecretCredential is partially configured
-    """
+    """Return a ClientSecretCredential built from environment variables."""
     __method_name = inspect.currentframe().f_code.co_name
 
     client_id = consts.AZURE_CLIENT_ID
-    client_secret = consts.AZURE_CLIENT_SECRET
-    tenant_id = consts.AZURE_TENANT_ID
-    try:
-        credential = ClientSecretCredential(
-            client_id=client_id, client_secret=client_secret, tenant_id=tenant_id
-        )
-        applogger.debug(
-            consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                "SentinelAuth",
-                f"Using ClientSecretCredential (client_id={client_id[:20]}...)",
-            )
-        )
-        return credential
-    except Exception as exc:
-        error_msg = consts.LOG_FORMAT.format(
+    credential = ClientSecretCredential(
+        client_id=client_id,
+        client_secret=consts.AZURE_CLIENT_SECRET,
+        tenant_id=consts.AZURE_TENANT_ID,
+    )
+    applogger.debug(
+        consts.LOG_FORMAT.format(
             consts.LOG_PREFIX,
             __method_name,
             "SentinelAuth",
-            f"Failed to create ClientSecretCredential: type={type(exc).__name__}, reason={str(exc)[:150]}",
+            f"Using ClientSecretCredential (client_id={client_id[:20]}...)",
         )
-        applogger.error(error_msg)
-        raise ValueError(error_msg) from exc
+    )
+    return credential
 
 
 def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:

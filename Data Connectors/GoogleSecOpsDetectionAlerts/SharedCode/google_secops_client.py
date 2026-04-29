@@ -44,59 +44,6 @@ class GoogleAuthTransport(httpx.BaseTransport):
         return self._transport.handle_request(request)
 
 
-def parse_stream(response: httpx.Response) -> Iterator[dict]:
-    """Parse detection batches from a SecOps streaming response.
-
-    Accumulates all lines from the stream into a single buffer, then
-    parses the resulting JSON array and yields each batch.
-
-    Yields:
-        Parsed JSON batch dicts (including heartbeats).
-
-    Raises:
-        GoogleSecOpsApiError: On stream read or JSON decode failure.
-    """
-    response.raise_for_status()
-
-    # Parse stream (same as google_secops_client.parse_stream)
-    lines_received = 0
-    batches_found = 0
-    batch = ""
-
-    try:
-        for line in response.iter_lines():
-            if not line:
-                continue
-            lines_received += 1
-
-            batches_found += 1
-            batch += line
-
-        if not batch:
-            return
-
-        for item in json.loads(batch):
-            yield item
-
-    except Exception as exc:
-        error_msg = f"Stream read error: {exc}"
-        applogger.error(
-            consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX, "parse_stream", "GoogleSecOpsAPI", error_msg
-            )
-        )
-        raise GoogleSecOpsApiError(error_msg) from exc
-    finally:
-        applogger.info(
-            consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                "parse_stream",
-                "GoogleSecOpsAPI",
-                f"Stream complete: lines_received={lines_received}, batches_found={batches_found}",
-            )
-        )
-
-
 class GoogleSecOpsClient:
     """Client for polling Google SecOps Detection Alerts API.
 
@@ -110,9 +57,9 @@ class GoogleSecOpsClient:
     def __init__(
         self,
         auth: GoogleServiceAccountAuth,
-        project_id: str = consts.GOOLE_SECOPS_PROJECT_ID,
-        region: str = consts.GOOLE_SECOPS_REGION,
-        instance_id: str = consts.GOOLE_SECOPS_INSTANCE_ID,
+        project_id: str = consts.GOOGLE_SECOPS_PROJECT_ID,
+        region: str = consts.GOOGLE_SECOPS_REGION,
+        instance_id: str = consts.GOOGLE_SECOPS_INSTANCE_ID,
     ):
         """Initialize SecOps client.
 
@@ -471,9 +418,9 @@ class GoogleSecOpsClient:
             body_snippet = ""
 
         diagnostics = (
-            f"project_id={consts.GOOLE_SECOPS_PROJECT_ID}, "
-            f"region={consts.GOOLE_SECOPS_REGION}, "
-            f"instance_id={consts.GOOLE_SECOPS_INSTANCE_ID}, "
+            f"project_id={consts.GOOGLE_SECOPS_PROJECT_ID}, "
+            f"region={consts.GOOGLE_SECOPS_REGION}, "
+            f"instance_id={consts.GOOGLE_SECOPS_INSTANCE_ID}, "
             f"pageToken={'set' if page_token else 'not set'}, "
             f"pageStart={page_start or 'not set'}"
         )
