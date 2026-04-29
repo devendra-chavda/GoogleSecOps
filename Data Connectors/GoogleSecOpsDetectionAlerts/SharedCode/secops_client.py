@@ -315,7 +315,9 @@ class SecOpsClient:
             )
         )
 
-        buffer = ""
+        final_response = {}
+        batch = ""
+        depth = 0
         try:
             with self.http_client.stream(
                 "POST",
@@ -325,20 +327,62 @@ class SecOpsClient:
             ) as response:
                 self._check_response_status(response, page_token, page_start)
 
-                try:
-                    for line in response.iter_lines():
-                        if not line:
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+
+                    # Slice from first { so array openers like "[{" or bare
+                    # "[", "]", "," are skipped without entering the buffer
+                    if depth == 0:
+                        start = line.find('{')
+                        if start == -1:
                             continue
-                        buffer += line
-                finally:
-                    applogger.info(
-                        consts.LOG_FORMAT.format(
+                        line = line[start:]
+
+                    batch += line
+                    # str.count() is C-level — not char-by-char Python iteration
+                    depth += line.count('{') - line.count('}')
+
+                    if depth != 0:
+                        continue
+
+                    # depth == 0: complete object in buffer; strip trailing },  }] }],
+                    try:
+                        obj = json.loads(batch.rstrip(' ,]'))
+                    except json.JSONDecodeError as exc:
+                        error_msg = consts.LOG_FORMAT.format(
                             consts.LOG_PREFIX,
                             __method_name,
                             "SecOpsClient",
-                            f"Stream complete: bytes_received={len(buffer)}",
+                            f"Failed to parse stream JSON: {exc}",
                         )
-                    )
+                        applogger.error(error_msg)
+                        raise SecOpsApiError(error_msg) from exc
+                    batch = ""
+
+                    if obj.get("heartbeat"):
+                        applogger.debug(
+                            consts.LOG_FORMAT.format(
+                                consts.LOG_PREFIX,
+                                __method_name,
+                                "SecOpsClient",
+                                "Heartbeat received (connection active)",
+                            )
+                        )
+                        continue
+
+                    if "detections" in obj or "nextPageStartTime" in obj:
+                        applogger.info(
+                            consts.LOG_FORMAT.format(
+                                consts.LOG_PREFIX,
+                                __method_name,
+                                "SecOpsClient",
+                                f"Batch received with "
+                                f"{len(obj.get('detections', []))} detections",
+                            )
+                        )
+                        final_response = obj
+                        break
 
         except SecOpsApiError:
             # Already wrapped/logged by _check_response_status; don't re-wrap
@@ -371,54 +415,7 @@ class SecOpsClient:
             applogger.error(error_msg)
             raise SecOpsApiError(error_msg) from exc
 
-        if not buffer:
-            return {}
-
-        try:
-            parsed = json.loads(buffer)
-        except json.JSONDecodeError as exc:
-            error_msg = consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                "SecOpsClient",
-                f"Failed to parse stream JSON: {exc}",
-            )
-            applogger.error(error_msg)
-            raise SecOpsApiError(error_msg) from exc
-
-        # Stream is a JSON array; pick the first batch with real data,
-        # logging and skipping heartbeats along the way.
-        if isinstance(parsed, dict):
-            return parsed
-
-        if not isinstance(parsed, list):
-            return {}
-
-        for item in parsed:
-            if not isinstance(item, dict):
-                continue
-            if item.get("heartbeat"):
-                applogger.debug(
-                    consts.LOG_FORMAT.format(
-                        consts.LOG_PREFIX,
-                        __method_name,
-                        "SecOpsClient",
-                        "Heartbeat received (connection active)",
-                    )
-                )
-                continue
-            applogger.info(
-                consts.LOG_FORMAT.format(
-                    consts.LOG_PREFIX,
-                    __method_name,
-                    "SecOpsClient",
-                    f"Batch received with "
-                    f"{len(item.get('detections', []))} detections",
-                )
-            )
-            return item
-
-        return {}
+        return final_response
 
     @staticmethod
     def _build_request_body(page_start: str, page_token: Optional[str]) -> dict:
