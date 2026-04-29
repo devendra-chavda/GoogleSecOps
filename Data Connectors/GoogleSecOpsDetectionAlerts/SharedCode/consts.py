@@ -10,7 +10,6 @@ Pipeline Overview:
 """
 
 import os
-from .utils import parse_cron_timeout
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # APPLICATION METADATA
@@ -140,6 +139,3 @@ RETRY_BASE_DELAY_SECONDS = 2  # Initial backoff delay: 2 seconds
 MAX_CONSECUTIVE_FAILURES = 3  # Give up after 3 consecutive errors
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}  # HTTP codes to retry on
 
-# Function timeout calculated from Azure schedule (CRON expression)
-# Example: "0 */10 * * * *" (every 10 min) → 570 seconds
-FUNCTION_APP_TIMEOUT_SECONDS = int(parse_cron_timeout())
