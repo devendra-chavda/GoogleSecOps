@@ -82,28 +82,6 @@ def _get_credential():
             applogger.error(error_msg)
             raise ValueError(error_msg) from exc
 
-    # Fall back to DefaultAzureCredential
-    try:
-        credential = DefaultAzureCredential()
-        applogger.debug(
-            consts.LOG_FORMAT.format(
-                consts.LOG_PREFIX,
-                __method_name,
-                "SentinelAuth",
-                "Using DefaultAzureCredential (managed identity/MSI)",
-            )
-        )
-        return credential
-    except Exception as exc:
-        error_msg = consts.LOG_FORMAT.format(
-            consts.LOG_PREFIX,
-            __method_name,
-            "SentinelAuth",
-            f"Failed to create DefaultAzureCredential: type={type(exc).__name__}, reason={str(exc)[:150]}",
-        )
-        applogger.error(error_msg)
-        raise ValueError(error_msg) from exc
-
 
 def post_data(body: str, stream_name: str = consts.DCR_STREAM_NAME) -> None:
     """Upload a JSON array *body* to Log Analytics via DCR ingestion.

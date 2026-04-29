@@ -22,7 +22,7 @@
       "type": "string",
       "minLength": 1,
       "metadata": {
-        "description": "Log Analytics workspace name. Can be found under Log Analytics \"Settings\"."
+        "description": "Log Analytics workspace name. Can be found under Log Analytics Settings."
       }
     },
     "GCSDetectionAlertsTableName": {
@@ -30,7 +30,7 @@
       "defaultValue": "GCSDetectionAlerts",
       "maxLength": 52,
       "metadata": {
-        "description": "Enter name of the table used to store detection alerts. Default is 'GCSDetectionAlerts'."
+        "description": "Enter name of the table used to store detection alerts. Default is GCSDetectionAlerts."
       }
     },
     "SecOpsProjectId": {
@@ -156,7 +156,7 @@
     "AppInsightsWorkspaceResourceID": {
       "type": "string",
       "metadata": {
-        "description": "Migrate Classic Application Insights to Log Analytic Workspace which is retiring by 29 February 2024. Use 'Log Analytic Workspace-->Properties' blade having 'Resource ID' property value. This is a fully qualified resourceId which is in format '/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.OperationalInsights/workspaces/{workspaceName}'."
+        "description": "Migrate Classic Application Insights to Log Analytic Workspace which is retiring by 29 February 2024. Use Log Analytic Workspace -- Properties blade having Resource ID property value. This is a fully qualified resourceId which is in format /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.OperationalInsights/workspaces/{workspaceName}."
       }
     }
   },
