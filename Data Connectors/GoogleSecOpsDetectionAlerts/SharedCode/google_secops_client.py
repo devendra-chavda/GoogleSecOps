@@ -29,6 +29,12 @@ class GoogleAuthTransport(httpx.BaseTransport):
     """HTTPX transport that signs each request with Google service account credentials."""
 
     def __init__(self, credentials, transport: Optional[httpx.BaseTransport] = None):
+        """Initialize the transport with Google credentials.
+
+        Args:
+            credentials: Google service account credentials used to sign requests.
+            transport: Underlying HTTPX transport; defaults to HTTPTransport if omitted.
+        """
         self._transport = transport or httpx.HTTPTransport()
         self._auth_request = google.auth.transport.requests.Request()
         self._credentials = credentials
